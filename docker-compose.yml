@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+      # network: host
+      # network_mode: "bridge"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:5002/api
+    depends_on:
+      - api
+    restart: unless-stopped
+    
+  # API服务
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # network: host
+      # network_mode: "bridge"
+    ports:
+      - "5002:5002"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - PORT=5002
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+  
+
+volumes:
+  audio_data:
+    driver: local 

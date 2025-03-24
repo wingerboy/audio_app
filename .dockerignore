@@ -1,0 +1,35 @@
+# 前端构建文件
+frontend/node_modules
+frontend/.next
+frontend/out
+frontend/.git
+frontend/.gitignore
+
+# Python缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+
+# 环境文件
+.env
+.env.local
+.env.*.local
+.venv
+env/
+venv/
+ENV/
+
+# 日志和临时文件
+*.log
+tmp/
+temp/
+.DS_Store
+
+# 已下载的模型文件
+models/
+
+# IDE配置
+.idea/
+.vscode/ 
