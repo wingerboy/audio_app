@@ -1,3 +1,11 @@
+# 环境变量
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+
 # Python
 __pycache__/
 *.py[cod]
@@ -20,12 +28,17 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Virtual Environment
 venv/
 ENV/
 env/
-.env
+.venv/
+.env/
 
 # IDE
 .idea/
@@ -33,40 +46,78 @@ env/
 *.swp
 *.swo
 .DS_Store
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+*.code-workspace
 
 # 日志
 logs/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
 # 临时文件
 temp/
 tmp/
 .tmp/
+*.tmp
+*.bak
+*.swp
+*~
 
 # 数据文件
 data/
+uploads/
+media/
 *.wav
 *.mp3
 *.ogg
 *.flac
 *.m4a
+*.aac
+*.wma
+*.db
+*.sqlite
+*.sqlite3
+*.mysql
 
 # Node.js
 node_modules/
-npm-debug.log
-yarn-debug.log
-yarn-error.log
-.pnpm-debug.log
+.npm/
+.yarn/
+.pnp/
+.pnp.js
 
 # 前端构建
-frontend/build/
-frontend/dist/
 frontend/.next/
 frontend/out/
+frontend/build/
+frontend/dist/
+frontend/.cache/
+frontend/public/uploads/
+.next/
+out/
+build/
+dist/
 
 # Docker
 .docker/
 docker-volumes/
+mysql_data/
+*.env.docker
+
+# 系统文件
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
 # 其他
 .coverage
@@ -75,4 +126,11 @@ htmlcov/
 .tox/
 nosetests.xml
 coverage.xml
-*.cover 
+*.cover
+*.pyc
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+__pypackages__/ 
