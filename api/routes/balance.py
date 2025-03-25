@@ -1,9 +1,10 @@
 from flask import Blueprint, request, jsonify, current_app
 import logging
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import get_jwt_identity, get_jwt
 from src.balance_system.services.balance_service import BalanceService
 from src.balance_system.services.pricing_service import PricingService
 from functools import wraps
+from api.auth import admin_required, login_required
 
 # 初始化日志
 logger = logging.getLogger(__name__)
@@ -11,18 +12,8 @@ logger = logging.getLogger(__name__)
 # 创建蓝图
 bp = Blueprint('balance_bp', __name__, url_prefix='/api/balance')
 
-def admin_required(f):
-    """需要管理员权限的装饰器"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        claims = get_jwt()
-        if not claims.get('is_admin'):
-            return jsonify({'message': '需要管理员权限'}), 403
-        return f(*args, **kwargs)
-    return decorated
-
 @bp.route('/info', methods=['GET'])
-@jwt_required()
+@login_required
 def get_balance_info():
     """获取当前用户的余额信息"""
     try:
@@ -44,7 +35,7 @@ def get_balance_info():
         }), 500
 
 @bp.route('/transactions', methods=['GET'])
-@jwt_required()
+@login_required
 def get_transactions():
     """获取用户交易记录"""
     try:
@@ -81,7 +72,7 @@ def get_transactions():
         }), 500
 
 @bp.route('/packages', methods=['GET'])
-@jwt_required()
+@login_required
 def get_charge_packages():
     """获取可用的充值套餐"""
     try:
@@ -104,7 +95,7 @@ def get_charge_packages():
         }), 500
 
 @bp.route('/pricing', methods=['GET'])
-@jwt_required()
+@login_required
 def get_pricing_rules():
     """获取计费规则"""
     try:
@@ -127,7 +118,7 @@ def get_pricing_rules():
         }), 500
 
 @bp.route('/calculate_price', methods=['POST'])
-@jwt_required()
+@login_required
 def calculate_price():
     """计算API使用费用"""
     try:
@@ -172,7 +163,7 @@ def calculate_price():
         }), 500
 
 @bp.route('/admin/charge', methods=['POST'])
-@jwt_required()
+@login_required
 @admin_required
 def admin_charge_balance():
     """管理员对用户账户充值"""

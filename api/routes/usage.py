@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify, current_app
 import logging
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import get_jwt_identity
 from src.balance_system.services.api_usage_service import ApiUsageService
+from api.auth import login_required
 
 # 初始化日志
 logger = logging.getLogger(__name__)
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 bp = Blueprint('usage_bp', __name__, url_prefix='/api/usage')
 
 @bp.route('/record', methods=['POST'])
-@jwt_required()
+@login_required
 def record_api_usage():
     """记录API使用情况"""
     try:
@@ -69,7 +70,7 @@ def record_api_usage():
         }), 500
 
 @bp.route('/history', methods=['GET'])
-@jwt_required()
+@login_required
 def get_api_usage_history():
     """获取API使用历史记录"""
     try:
@@ -107,7 +108,7 @@ def get_api_usage_history():
         }), 500
 
 @bp.route('/stats', methods=['GET'])
-@jwt_required()
+@login_required
 def get_api_usage_stats():
     """获取API使用统计信息"""
     try:

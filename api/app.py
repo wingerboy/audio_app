@@ -250,24 +250,27 @@ def login():
         }), 500
 
 @app.route('/api/auth/me', methods=['GET'])
-@jwt_required()
+@login_required
 def get_me():
-    """获取当前登录用户信息"""
+    """获取当前用户信息"""
     try:
-        user_id = get_jwt_identity()
+        # 获取当前用户
         from src.balance_system.models.user import User
         from src.balance_system.db import db_session
         
+        user_id = get_jwt_identity()
         user = db_session.query(User).filter(User.id == user_id).first()
+        
         if not user:
             return jsonify({
                 'status': 'error',
                 'message': '未找到用户信息'
             }), 404
         
+        # 返回用户信息
         return jsonify({
             'status': 'success',
-            'user': {
+            'data': {
                 'id': user.id,
                 'username': user.username,
                 'email': user.email,
@@ -286,41 +289,73 @@ def get_me():
         }), 500
 
 @app.route('/api/auth/update', methods=['PUT'])
-@jwt_required()
+@login_required
 def update_account():
-    """更新用户信息"""
+    """更新用户账户信息"""
     try:
-        user_id = get_jwt_identity()
+        data = request.json
+        
+        # 获取当前用户
         from src.balance_system.models.user import User
         from src.balance_system.db import db_session
         
+        user_id = get_jwt_identity()
         user = db_session.query(User).filter(User.id == user_id).first()
+        
         if not user:
             return jsonify({
                 'status': 'error',
                 'message': '未找到用户信息'
             }), 404
         
-        data = request.json
-        
         # 允许更新的字段
         allowed_fields = ['username', 'email', 'password']
-        update_data = {k: v for k, v in data.items() if k in allowed_fields}
         
-        # 更新用户
-        for field, value in update_data.items():
-            if field == 'password':
-                user.password_hash = value  # 实际应用中应该使用加密后的密码
-            else:
-                setattr(user, field, value)
+        # 检查字段是否合法
+        for field in data:
+            if field not in allowed_fields:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'不允许更新字段: {field}'
+                }), 400
         
+        # 更新用户信息
+        if 'username' in data:
+            user.username = data['username']
+        
+        if 'email' in data:
+            # 检查邮箱是否已被其他用户使用
+            existing_user = db_session.query(User).filter(
+                User.email == data['email'], 
+                User.id != user_id
+            ).first()
+            
+            if existing_user:
+                return jsonify({
+                    'status': 'error',
+                    'message': '该邮箱已被其他用户使用'
+                }), 400
+            
+            user.email = data['email']
+        
+        if 'password' in data:
+            # 密码长度验证
+            if len(data['password']) < 6:
+                return jsonify({
+                    'status': 'error',
+                    'message': '密码至少需要6个字符'
+                }), 400
+            
+            user.set_password(data['password'])
+        
+        # 保存更新
         db_session.commit()
-        db_session.refresh(user)
         
+        # 返回更新后的用户信息
         return jsonify({
             'status': 'success',
-            'message': '用户信息已更新',
-            'user': {
+            'message': '用户信息更新成功',
+            'data': {
                 'id': user.id,
                 'username': user.username,
                 'email': user.email,
@@ -335,7 +370,7 @@ def update_account():
         logger.exception(f"更新用户信息时出错: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': f'更新失败: {str(e)}'
+            'message': f'更新用户信息失败: {str(e)}'
         }), 500
         
 #
@@ -725,32 +760,10 @@ def health_check():
 
 # 用户信息端点
 @app.route('/api/user/me', methods=['GET'])
-@jwt_required()
+@login_required
 def get_current_user():
-    user_id = get_jwt_identity()
-    from src.balance_system.models.user import User
-    from src.balance_system.db import db_session
-    
-    user = db_session.query(User).filter(User.id == user_id).first()
-    if not user:
-        return jsonify({
-            "status": "error",
-            "message": "未找到用户信息"
-        }), 404
-        
-    return jsonify({
-        "status": "success",
-        "data": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "is_active": user.is_active,
-            "is_admin": user.is_admin,
-            "balance": float(user.balance),
-            "total_charged": float(user.total_charged),
-            "total_consumed": float(user.total_consumed)
-        }
-    })
+    """获取当前用户信息 (与/api/auth/me功能相同，保留此路由是为了兼容性)"""
+    return get_me()
 
 if __name__ == '__main__':
     # 启动API服务
