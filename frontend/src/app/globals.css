@@ -4,59 +4,106 @@
 
 :root {
   --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 250, 251, 252;
-  --background-end-rgb: 245, 247, 250;
+  --background-start-rgb: 255, 255, 255;
+  --background-end-rgb: 255, 255, 255;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 15, 23, 42;
-    --background-end-rgb: 30, 41, 59;
+    --background-start-rgb: 13, 17, 23;
+    --background-end-rgb: 13, 17, 23;
   }
 }
 
 body {
   color: rgb(var(--foreground-rgb));
   background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+    to bottom,
+    rgb(var(--background-start-rgb)),
+    rgb(var(--background-end-rgb))
+  );
+}
+
+/* 增强文字对比度 */
+.text-primary {
+  @apply text-gray-900 dark:text-white;
+}
+
+.text-secondary {
+  @apply text-gray-800 dark:text-gray-100;
+}
+
+.text-muted {
+  @apply text-gray-600 dark:text-gray-300;
+}
+
+/* 卡片和背景 */
+.card {
+  @apply bg-white dark:bg-gray-800 shadow-lg rounded-lg border border-gray-200 dark:border-gray-700;
+}
+
+.bg-primary {
+  @apply bg-white dark:bg-gray-900;
+}
+
+.bg-secondary {
+  @apply bg-gray-50 dark:bg-gray-800;
+}
+
+/* 状态标签 */
+.status-label {
+  @apply px-3 py-1 rounded-full text-sm font-medium text-white;
+}
+
+.status-available {
+  @apply bg-green-600 text-white;
+}
+
+.status-unavailable {
+  @apply bg-red-600 text-white;
+}
+
+.status-warning {
+  @apply bg-yellow-600 text-white;
+}
+
+/* 按钮样式 */
+.btn-primary {
+  @apply bg-blue-600 hover:bg-blue-700 text-white font-medium;
+}
+
+.btn-secondary {
+  @apply bg-gray-200 hover:bg-gray-300 text-gray-800 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white font-medium;
 }
 
 @layer components {
   .btn-primary {
-    @apply px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors;
+    @apply px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors font-medium;
   }
 
   .btn-secondary {
-    @apply px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors;
+    @apply px-4 py-2 bg-white text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors font-medium dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:hover:bg-gray-700;
   }
 
   .btn-danger {
-    @apply px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors;
+    @apply px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors font-medium;
   }
 
   .form-input {
-    @apply block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-400 focus:ring focus:ring-primary-200 focus:ring-opacity-50;
+    @apply block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white shadow-sm focus:border-primary-400 focus:ring focus:ring-primary-200 focus:ring-opacity-50;
   }
 
   .form-select {
-    @apply block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-400 focus:ring focus:ring-primary-200 focus:ring-opacity-50;
+    @apply block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white shadow-sm focus:border-primary-400 focus:ring focus:ring-primary-200 focus:ring-opacity-50;
   }
 
   .form-checkbox {
     @apply rounded border-gray-300 text-primary-600 shadow-sm focus:border-primary-400 focus:ring focus:ring-primary-200 focus:ring-opacity-50;
   }
 
-  .card {
-    @apply bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden;
-  }
-
   .card-header {
-    @apply px-6 py-4 border-b border-gray-200 dark:border-gray-700;
+    @apply px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-lg;
   }
 
   .card-body {
@@ -64,6 +111,19 @@ body {
   }
 
   .card-footer {
-    @apply px-6 py-4 border-t border-gray-200 dark:border-gray-700;
+    @apply px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-b-lg;
+  }
+
+  /* 系统状态组件 */
+  .system-status {
+    @apply px-3 py-1.5 rounded-md text-sm font-medium inline-flex items-center gap-2;
+  }
+  
+  .system-status-available {
+    @apply bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100 border border-green-200 dark:border-green-800;
+  }
+  
+  .system-status-unavailable {
+    @apply bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100 border border-red-200 dark:border-red-800;
   }
 } 

@@ -22,30 +22,30 @@ export default function UploadPage() {
     <ProtectedRoute>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">上传音频文件</h1>
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">上传音频文件</h1>
           <button
             onClick={() => router.push('/')}
-            className="text-primary-600 hover:text-primary-700"
+            className="text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 font-medium"
           >
             返回首页
           </button>
         </div>
 
-        <p className="text-gray-600">
+        <p className="text-gray-700 dark:text-gray-300">
           上传音频或视频文件以开始处理。支持的格式包括MP3、WAV、OGG、FLAC、M4A、MP4、AVI、MKV、MOV等。
         </p>
 
         <FileUploader />
         
         {currentTask && (
-          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
-            <p className="text-blue-700">
+          <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
+            <p className="text-blue-800 dark:text-blue-300 font-medium">
               当前任务: {currentTask.filename} ({currentTask.status})
             </p>
             {currentTask.status === 'uploaded' && (
               <button
                 onClick={() => router.push(`/tasks/${currentTask.id}`)}
-                className="mt-2 text-primary-600 hover:text-primary-700 font-medium"
+                className="mt-2 text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 font-medium"
               >
                 继续处理此文件
               </button>

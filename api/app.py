@@ -212,7 +212,13 @@ def login():
         from src.balance_system.db import db_session
         
         user = db_session.query(User).filter(User.email == data['email']).first()
-        if not user or user.password_hash != data['password']:  # 实际应用中应该使用加密后的密码比较
+        if not user:
+            return jsonify({
+                'status': 'error',
+                'message': '账号未注册'
+            }), 401
+            
+        if user.password_hash != data['password']:  # 实际应用中应该使用加密后的密码比较
             return jsonify({
                 'status': 'error',
                 'message': '邮箱或密码错误'

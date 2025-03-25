@@ -127,20 +127,20 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
               }}
               className={`flex flex-col items-center ${
                 step.id === uiState.currentStep
-                  ? 'text-primary-600 font-medium'
+                  ? 'text-primary-600 dark:text-primary-400 font-medium'
                   : step.id < uiState.currentStep || (step.id === 4 && currentTask?.status === 'completed')
-                  ? 'text-gray-600 cursor-pointer hover:text-primary-500'
-                  : 'text-gray-400 cursor-not-allowed'
+                  ? 'text-gray-700 dark:text-gray-300 cursor-pointer hover:text-primary-500 dark:hover:text-primary-400'
+                  : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
               }`}
               disabled={step.id > uiState.currentStep && !(step.id === 4 && currentTask?.status === 'completed')}
             >
               <span
                 className={`w-10 h-10 flex items-center justify-center rounded-full mb-2 ${
                   step.id === uiState.currentStep
-                    ? 'bg-primary-600 text-white'
+                    ? 'bg-primary-600 dark:bg-primary-700 text-white'
                     : step.id < uiState.currentStep || (step.id === 4 && currentTask?.status === 'completed')
-                    ? 'bg-gray-200 text-gray-700'
-                    : 'bg-gray-100 text-gray-400'
+                    ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
                 }`}
               >
                 {step.id}
@@ -153,14 +153,34 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
     );
   };
   
+  // 获取状态样式
+  const getStatusStyle = (status: string) => {
+    switch(status) {
+      case 'uploaded':
+        return 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800';
+      case 'processing':
+        return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800';
+      case 'analyzed':
+        return 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800';
+      case 'splitting':
+        return 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300 border border-orange-200 dark:border-orange-800';
+      case 'completed':
+        return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 border border-green-200 dark:border-green-800';
+      case 'failed':
+        return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800';
+      default:
+        return 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-300';
+    }
+  };
+  
   return (
     <ProtectedRoute>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">音频处理任务</h1>
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">音频处理任务</h1>
           <button
             onClick={() => router.push('/')}
-            className="text-primary-600 hover:text-primary-700"
+            className="text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 font-medium"
           >
             返回首页
           </button>
@@ -171,12 +191,12 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
             <LoadingSpinner size="lg" />
           </div>
         ) : error ? (
-          <div className="bg-red-50 border border-red-200 rounded-md p-4 text-red-700">
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 text-red-700 dark:text-red-400">
             <p className="font-medium">错误</p>
             <p>{error}</p>
             <button
               onClick={() => router.push('/')}
-              className="mt-4 text-primary-600 hover:text-primary-700 font-medium"
+              className="mt-4 text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 font-medium"
             >
               返回首页
             </button>
@@ -184,28 +204,45 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
         ) : (
           <>
             {currentTask && (
-              <div className="bg-white p-4 rounded-lg shadow mb-6">
-                <h2 className="text-lg font-medium mb-2">任务信息</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">文件名</p>
-                    <p className="font-medium">{currentTask.filename}</p>
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md border border-gray-200 dark:border-gray-700 mb-6">
+                <h2 className="text-lg font-medium mb-4 text-gray-900 dark:text-white">任务信息</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
+                    <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">文件名</p>
+                    <p className="font-semibold text-gray-900 dark:text-white">{currentTask.filename}</p>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-500">大小</p>
-                    <p className="font-medium">{currentTask.size_mb.toFixed(2)} MB</p>
+                  <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
+                    <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">大小</p>
+                    <p className="font-semibold text-gray-900 dark:text-white">{currentTask.size_mb.toFixed(2)} MB</p>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-500">状态</p>
-                    <p className="font-medium">{currentTask.status}</p>
+                  <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
+                    <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">状态</p>
+                    <span className={`inline-flex px-3 py-1 rounded-full text-sm font-medium ${getStatusStyle(currentTask.status)}`}>
+                      {currentTask.status}
+                    </span>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-500">创建时间</p>
-                    <p className="font-medium">
+                  <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
+                    <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">创建时间</p>
+                    <p className="font-semibold text-gray-900 dark:text-white">
                       {new Date(currentTask.created_at * 1000).toLocaleString()}
                     </p>
                   </div>
                 </div>
+                
+                {currentTask.progress !== undefined && currentTask.progress > 0 && currentTask.progress < 100 && (
+                  <div className="mt-6">
+                    <div className="flex justify-between mb-1">
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">处理进度</p>
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{Math.round(currentTask.progress)}%</p>
+                    </div>
+                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+                      <div
+                        className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full transition-all duration-300"
+                        style={{ width: `${currentTask.progress}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             

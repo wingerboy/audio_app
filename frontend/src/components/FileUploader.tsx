@@ -88,7 +88,7 @@ export function FileUploader() {
   return (
     <div className="card">
       <div className="card-header">
-        <h2 className="text-xl font-medium">上传文件</h2>
+        <h2 className="text-xl font-medium text-gray-900 dark:text-white">上传文件</h2>
       </div>
       
       <div className="card-body">
@@ -96,8 +96,8 @@ export function FileUploader() {
           {...getRootProps()}
           className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
             isDragActive 
-              ? 'border-primary-400 bg-primary-50' 
-              : 'border-gray-300 hover:border-primary-300'
+              ? 'border-primary-400 bg-primary-50 dark:border-primary-500 dark:bg-primary-900/20' 
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-300 dark:hover:border-primary-600'
           } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           <input {...getInputProps()} />
@@ -105,11 +105,11 @@ export function FileUploader() {
           <div className="flex flex-col items-center justify-center space-y-4">
             {!file && !uploading && (
               <>
-                <FiUpload className="w-12 h-12 text-gray-400" />
-                <p className="text-lg">
-                  拖放文件到此处，或<span className="text-primary-600">点击选择文件</span>
+                <FiUpload className="w-12 h-12 text-gray-400 dark:text-gray-300" />
+                <p className="text-lg text-gray-800 dark:text-gray-200">
+                  拖放文件到此处，或<span className="text-primary-600 dark:text-primary-400 font-medium">点击选择文件</span>
                 </p>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
                   支持的格式: MP3, WAV, OGG, FLAC, M4A, MP4, AVI, MKV, MOV (最大 500MB)
                 </p>
               </>
@@ -117,40 +117,40 @@ export function FileUploader() {
             
             {file && !uploading && (
               <div className="flex items-center space-x-3">
-                <FiFile className="w-8 h-8 text-primary-500" />
+                <FiFile className="w-8 h-8 text-primary-500 dark:text-primary-400" />
                 <div className="text-left">
-                  <p className="font-medium">{file.name}</p>
-                  <p className="text-sm text-gray-500">{formatFileSize(file.size)}</p>
+                  <p className="font-medium text-gray-800 dark:text-gray-200">{file.name}</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{formatFileSize(file.size)}</p>
                 </div>
-                <FiCheckCircle className="w-6 h-6 text-green-500" />
+                <FiCheckCircle className="w-6 h-6 text-green-500 dark:text-green-400" />
               </div>
             )}
             
             {uploading && (
               <div className="w-full max-w-md">
-                <p className="mb-2 font-medium">正在上传...</p>
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                <p className="mb-2 font-medium text-gray-800 dark:text-gray-200">正在上传...</p>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
                   <div
-                    className="bg-primary-600 h-2.5 rounded-full"
+                    className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full"
                     style={{ width: `${uploadProgress}%` }}
                   ></div>
                 </div>
-                <p className="mt-2 text-sm text-gray-500">{uploadProgress}%</p>
+                <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">{uploadProgress}%</p>
               </div>
             )}
           </div>
         </div>
         
         {uploadError && (
-          <div className="mt-4 p-3 bg-red-50 text-red-700 rounded flex items-center">
-            <FiAlertCircle className="w-5 h-5 mr-2" />
+          <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded flex items-center border border-red-200 dark:border-red-800">
+            <FiAlertCircle className="w-5 h-5 mr-2 flex-shrink-0" />
             <span>{uploadError}</span>
           </div>
         )}
         
         {fileRejections.length > 0 && (
-          <div className="mt-4 p-3 bg-red-50 text-red-700 rounded flex items-center">
-            <FiAlertCircle className="w-5 h-5 mr-2" />
+          <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded flex items-center border border-red-200 dark:border-red-800">
+            <FiAlertCircle className="w-5 h-5 mr-2 flex-shrink-0" />
             <div>
               <p className="font-medium">文件无法上传：</p>
               <ul className="text-sm list-disc list-inside">
