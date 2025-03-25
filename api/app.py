@@ -2,46 +2,74 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
 import uuid
 import json
 import time
+import traceback
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import logging
 from werkzeug.utils import secure_filename
 import shutil
+from flask_jwt_extended import JWTManager
+from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
+from dotenv import load_dotenv
 
-# 导入现有的处理组件
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.audio_processor_adapter import AudioProcessorAdapter
-from src.ai_analyzer_adapter import AIAnalyzerAdapter
-from src.temp import TempFileManager, get_global_manager
-from environment_manager import EnvironmentManager
-from logging_config import LoggingConfig
+# 添加项目根目录到 Python 路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
 
-# 初始化日志 - 先配置详细的日志级别
-LoggingConfig.setup_logging(log_level=logging.DEBUG, app_name="audio_api")
-logger = LoggingConfig.get_logger(__name__)
-logger.info("======== 音频API服务启动 ========")
+# 加载环境变量
+load_dotenv()
+
+# 设置日志
+logging.basicConfig(level=logging.INFO,
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# 创建 Flask 应用
+app = Flask(__name__)
+CORS(app)
+
+# 配置 JWT
+jwt = JWTManager(app)
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
+app.config['UPLOAD_FOLDER'] = os.path.join(project_root, 'data', 'uploads')
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 最大500MB
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 60 * 60 * 24 * 7  # 7天
+
+# 确保上传目录存在
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# 初始化余额系统
+from src.balance_system import init_app as init_balance_system
+init_balance_system(app)
+
+# 注册API路由
+from api.routes.balance import bp as balance_bp
+from api.routes.usage import bp as usage_bp
+from api.auth import login_required, admin_required, get_current_user
+
+app.register_blueprint(balance_bp)
+app.register_blueprint(usage_bp)
 
 # 创建必要的目录结构
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(ROOT_DIR, "data")
+DATA_DIR = os.path.join(project_root, "data")
 TASKS_DIR = os.path.join(DATA_DIR, "tasks")
+USERS_DIR = os.path.join(DATA_DIR, "users")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(TASKS_DIR, exist_ok=True)
+os.makedirs(USERS_DIR, exist_ok=True)
 logger.info(f"创建数据目录: {DATA_DIR}")
 logger.info(f"创建任务目录: {TASKS_DIR}")
-
-# 初始化Flask应用
-app = Flask(__name__)
-CORS(app)  # 允许跨域请求
-
-# 设置上传文件大小限制 (500MB)
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
+logger.info(f"创建用户目录: {USERS_DIR}")
 
 # 初始化环境管理器和临时文件管理器
+from src.environment_manager import EnvironmentManager
+from src.temp import get_global_manager
 env_manager = EnvironmentManager()
 temp_manager = get_global_manager()
 
@@ -55,6 +83,25 @@ COMPONENTS_READY = {
 # 用于跟踪任务状态的字典
 tasks = {}
 
+# 添加全局错误处理装饰器
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """全局异常处理"""
+    # 提取异常详情
+    error_msg = str(e)
+    error_traceback = traceback.format_exc()
+    
+    # 记录错误详情
+    logger.error(f"未捕获的异常: {error_msg}")
+    logger.error(f"错误堆栈: {error_traceback}")
+    
+    # 返回错误响应
+    return jsonify({
+        "error": "服务器内部错误",
+        "message": error_msg,
+        "details": error_traceback if app.debug else None
+    }), 500
+
 def get_progress_callback(task_id):
     """创建进度回调函数"""
     def update_progress(message, percent):
@@ -64,17 +111,251 @@ def get_progress_callback(task_id):
         logger.info(f"Task {task_id}: {message} ({percent}%)")
     return update_progress
 
+# 导入音频处理相关的类
+from src.audio_processor_adapter import AudioProcessorAdapter
+from src.ai_analyzer_adapter import AIAnalyzerAdapter
+
+#
+# 认证API路由
+#
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """注册新用户"""
+    try:
+        data = request.json
+        
+        # 验证必要字段
+        required_fields = ['username', 'email', 'password']
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'缺少必要字段: {field}'
+                }), 400
+        
+        # 密码长度验证
+        if len(data['password']) < 6:
+            return jsonify({
+                'status': 'error',
+                'message': '密码至少需要6个字符'
+            }), 400
+        
+        # 创建用户
+        from src.balance_system.models.user import User
+        from src.balance_system.db import db_session
+        
+        # 检查邮箱是否已存在
+        existing_user = db_session.query(User).filter(User.email == data['email']).first()
+        if existing_user:
+            return jsonify({
+                'status': 'error',
+                'message': '该邮箱已被注册'
+            }), 400
+        
+        # 创建新用户
+        new_user = User(
+            username=data['username'],
+            email=data['email'],
+            password_hash=data['password'],  # 实际应用中应该使用加密后的密码
+            is_active=True,
+            is_admin=False,
+            balance=0,
+            total_charged=0,
+            total_consumed=0
+        )
+        
+        db_session.add(new_user)
+        db_session.commit()
+        db_session.refresh(new_user)
+        
+        # 生成令牌
+        access_token = create_access_token(identity=new_user.id)
+        
+        return jsonify({
+            'status': 'success',
+            'message': '注册成功',
+            'user': {
+                'id': new_user.id,
+                'username': new_user.username,
+                'email': new_user.email,
+                'is_active': new_user.is_active,
+                'is_admin': new_user.is_admin,
+                'balance': float(new_user.balance),
+                'total_charged': float(new_user.total_charged),
+                'total_consumed': float(new_user.total_consumed)
+            },
+            'token': access_token
+        })
+    except Exception as e:
+        logger.exception(f"注册用户时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'注册失败: {str(e)}'
+        }), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """用户登录"""
+    try:
+        data = request.json
+        
+        # 验证必要字段
+        if 'email' not in data or 'password' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': '请提供邮箱和密码'
+            }), 400
+        
+        # 认证用户
+        from src.balance_system.models.user import User
+        from src.balance_system.db import db_session
+        
+        user = db_session.query(User).filter(User.email == data['email']).first()
+        if not user or user.password_hash != data['password']:  # 实际应用中应该使用加密后的密码比较
+            return jsonify({
+                'status': 'error',
+                'message': '邮箱或密码错误'
+            }), 401
+        
+        # 生成令牌
+        access_token = create_access_token(identity=user.id)
+        
+        return jsonify({
+            'status': 'success',
+            'message': '登录成功',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'is_active': user.is_active,
+                'is_admin': user.is_admin,
+                'balance': float(user.balance),
+                'total_charged': float(user.total_charged),
+                'total_consumed': float(user.total_consumed)
+            },
+            'token': access_token
+        })
+    except Exception as e:
+        logger.exception(f"用户登录时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'登录失败: {str(e)}'
+        }), 500
+
+@app.route('/api/auth/me', methods=['GET'])
+@jwt_required()
+def get_me():
+    """获取当前登录用户信息"""
+    try:
+        user_id = get_jwt_identity()
+        from src.balance_system.models.user import User
+        from src.balance_system.db import db_session
+        
+        user = db_session.query(User).filter(User.id == user_id).first()
+        if not user:
+            return jsonify({
+                'status': 'error',
+                'message': '未找到用户信息'
+            }), 404
+        
+        return jsonify({
+            'status': 'success',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'is_active': user.is_active,
+                'is_admin': user.is_admin,
+                'balance': float(user.balance),
+                'total_charged': float(user.total_charged),
+                'total_consumed': float(user.total_consumed)
+            }
+        })
+    except Exception as e:
+        logger.exception(f"获取用户信息时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'获取用户信息失败: {str(e)}'
+        }), 500
+
+@app.route('/api/auth/update', methods=['PUT'])
+@jwt_required()
+def update_account():
+    """更新用户信息"""
+    try:
+        user_id = get_jwt_identity()
+        from src.balance_system.models.user import User
+        from src.balance_system.db import db_session
+        
+        user = db_session.query(User).filter(User.id == user_id).first()
+        if not user:
+            return jsonify({
+                'status': 'error',
+                'message': '未找到用户信息'
+            }), 404
+        
+        data = request.json
+        
+        # 允许更新的字段
+        allowed_fields = ['username', 'email', 'password']
+        update_data = {k: v for k, v in data.items() if k in allowed_fields}
+        
+        # 更新用户
+        for field, value in update_data.items():
+            if field == 'password':
+                user.password_hash = value  # 实际应用中应该使用加密后的密码
+            else:
+                setattr(user, field, value)
+        
+        db_session.commit()
+        db_session.refresh(user)
+        
+        return jsonify({
+            'status': 'success',
+            'message': '用户信息已更新',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'is_active': user.is_active,
+                'is_admin': user.is_admin,
+                'balance': float(user.balance),
+                'total_charged': float(user.total_charged),
+                'total_consumed': float(user.total_consumed)
+            }
+        })
+    except Exception as e:
+        logger.exception(f"更新用户信息时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'更新失败: {str(e)}'
+        }), 500
+        
+#
+# 系统状态API
+#
+
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """获取系统状态"""
-    return jsonify({
-        "status": "ok",
-        "components": COMPONENTS_READY,
-        "torch_version": env_manager.get_torch_version(),
-        "gpu_info": env_manager.get_gpu_info() if COMPONENTS_READY["gpu"] else "不可用"
-    })
+    try:
+        return jsonify({
+            "status": "ok",
+            "components": COMPONENTS_READY,
+            "torch_version": env_manager.get_torch_version(),
+            "gpu_info": env_manager.get_gpu_info() if COMPONENTS_READY["gpu"] else "不可用"
+        })
+    except Exception as e:
+        logger.exception(f"获取系统状态时出错: {str(e)}")
+        return jsonify({"error": str(e), "status": "error"}), 500
+
+#
+# 受保护的音频处理API路由
+#
 
 @app.route('/api/upload', methods=['POST'])
+@login_required
 def upload_file():
     """处理文件上传"""
     if 'file' not in request.files:
@@ -83,6 +364,15 @@ def upload_file():
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "未选择文件"}), 400
+    
+    # 获取当前用户
+    user_id = get_jwt_identity()
+    from src.balance_system.models.user import User
+    from src.balance_system.db import db_session
+    
+    user = db_session.query(User).filter(User.id == user_id).first()
+    if not user:
+        return jsonify({"error": "未找到用户信息"}), 404
     
     # 生成唯一任务ID
     task_id = str(uuid.uuid4())
@@ -103,10 +393,11 @@ def upload_file():
         "status": "uploaded",
         "progress": 0,
         "message": "文件已上传",
-        "created_at": time.time()
+        "created_at": time.time(),
+        "user_id": user.id  # 记录用户ID
     }
     
-    logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB), 任务ID: {task_id}")
+    logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB), 任务ID: {task_id}, 用户: {user.username}")
     
     return jsonify({
         "task_id": task_id,
@@ -405,7 +696,57 @@ def cleanup_task(task_id):
         logger.exception(f"清理任务资源时出错: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# 应用启动前的初始化
+def init_app():
+    logger.info("Initializing application...")
+    from src.environment_manager import EnvironmentManager
+    EnvironmentManager.ensure_ffmpeg()
+    EnvironmentManager.ensure_whisper()
+    EnvironmentManager.check_gpu_status()
+    logger.info("Application initialized.")
+
+# 在应用上下文中执行初始化
+with app.app_context():
+    init_app()
+
+# 健康检查端点
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        "status": "success",
+        "message": "API is running"
+    })
+
+# 用户信息端点
+@app.route('/api/user/me', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    user_id = get_jwt_identity()
+    from src.balance_system.models.user import User
+    from src.balance_system.db import db_session
+    
+    user = db_session.query(User).filter(User.id == user_id).first()
+    if not user:
+        return jsonify({
+            "status": "error",
+            "message": "未找到用户信息"
+        }), 404
+        
+    return jsonify({
+        "status": "success",
+        "data": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_active": user.is_active,
+            "is_admin": user.is_admin,
+            "balance": float(user.balance),
+            "total_charged": float(user.total_charged),
+            "total_consumed": float(user.total_consumed)
+        }
+    })
+
 if __name__ == '__main__':
     # 启动API服务
-    port = int(os.environ.get('PORT', 5002))  # 默认端口改为5002
+    port = int(os.getenv('PORT', 5002))
     app.run(host='0.0.0.0', port=port, debug=True) 

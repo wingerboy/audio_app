@@ -1,195 +1,172 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/lib/store';
-import apiService, { SystemStatus } from '@/lib/api';
-import { FileUploader } from '@/components/FileUploader';
-import { ModelSelector } from '@/components/ModelSelector';
-import { SegmentsList } from '@/components/SegmentsList';
-import { AudioSplitter } from '@/components/AudioSplitter';
-import { DownloadFiles } from '@/components/DownloadFiles';
-import { StatusBar } from '@/components/StatusBar';
+import { apiService } from '@/lib/api';
+import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { LoadingSpinner } from '@/components/LoadingSpinner';
 
-export default function Home() {
-  // 使用应用状态
-  const { 
-    systemStatus, 
-    setSystemStatus,
-    currentTask,
-    uiState,
-    setCurrentStep
-  } = useAppStore();
-  
-  // 本地状态
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  
-  // 获取系统状态
+export default function HomePage() {
+  const { isAuthenticated, isAuthInitialized } = useAppStore((state) => ({
+    isAuthenticated: state.auth.isAuthenticated,
+    isAuthInitialized: state.isAuthInitialized
+  }));
+
+  // 如果认证状态还在初始化，显示加载状态
+  if (!isAuthInitialized) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <LoadingSpinner size="md" />
+      </div>
+    );
+  }
+
+  // 根据认证状态显示不同内容
+  return isAuthenticated ? (
+    <ProtectedRoute>
+      <MainAppContent />
+    </ProtectedRoute>
+  ) : (
+    <WelcomePage />
+  );
+}
+
+// 欢迎页面 - 未认证用户
+function WelcomePage() {
+  const router = useRouter();
+
+  const handleGetStarted = () => {
+    router.push('/auth');
+  };
+
+  return (
+    <div className="py-12">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h1 className="text-4xl font-extrabold text-gray-900 sm:text-5xl">
+          音频分割和转写工具
+        </h1>
+        <p className="mt-4 text-xl text-gray-500">
+          简单高效的音频处理解决方案
+        </p>
+        <div className="mt-10">
+          <button
+            onClick={handleGetStarted}
+            className="px-8 py-3 border border-transparent text-base font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 md:text-lg"
+          >
+            开始使用
+          </button>
+        </div>
+        
+        <div className="mt-16 grid grid-cols-1 gap-8 md:grid-cols-3">
+          <div className="bg-white shadow rounded-lg p-6">
+            <h2 className="text-xl font-semibold text-gray-900">语音识别转写</h2>
+            <p className="mt-2 text-gray-500">
+              使用先进的AI语音识别技术将语音内容转换为文本
+            </p>
+          </div>
+          <div className="bg-white shadow rounded-lg p-6">
+            <h2 className="text-xl font-semibold text-gray-900">智能分割</h2>
+            <p className="mt-2 text-gray-500">
+              根据内容和语义自动将长音频分割成合适的段落
+            </p>
+          </div>
+          <div className="bg-white shadow rounded-lg p-6">
+            <h2 className="text-xl font-semibold text-gray-900">批量处理</h2>
+            <p className="mt-2 text-gray-500">
+              同时处理多个音频文件，提高工作效率
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 主应用内容 - 已认证用户
+function MainAppContent() {
+  const router = useRouter();
+  const { currentTask, setCurrentTask } = useAppStore((state) => ({
+    currentTask: state.currentTask,
+    setCurrentTask: state.setCurrentTask
+  }));
+  const { systemStatus, setSystemStatus } = useAppStore((state) => ({
+    systemStatus: state.systemStatus,
+    setSystemStatus: state.setSystemStatus
+  }));
+
   useEffect(() => {
-    const fetchSystemStatus = async () => {
+    const checkSystemStatus = async () => {
       try {
-        setLoading(true);
         const status = await apiService.getStatus();
         setSystemStatus(status);
-        setError(null);
-      } catch (err) {
-        console.error('获取系统状态失败:', err);
-        setError('无法连接到后端服务，请确保API服务正在运行。');
-      } finally {
-        setLoading(false);
+      } catch (error) {
+        console.error('获取系统状态失败', error);
       }
     };
-    
-    fetchSystemStatus();
+
+    checkSystemStatus();
   }, [setSystemStatus]);
-  
-  // 渲染系统状态
-  const renderSystemStatus = () => {
-    if (loading) {
-      return <div className="text-center py-4">正在检查系统状态...</div>;
-    }
-    
-    if (error) {
-      return (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4 text-red-700">
-          <p className="font-medium">错误</p>
-          <p>{error}</p>
-        </div>
-      );
-    }
-    
-    if (!systemStatus) {
-      return null;
-    }
-    
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div className="card">
-          <div className="card-body">
-            <h3 className="font-medium text-gray-700 mb-2">FFmpeg</h3>
-            {systemStatus.components.ffmpeg ? (
-              <div className="text-green-600">✓ 可用</div>
-            ) : (
-              <div className="text-red-600">✗ 不可用</div>
-            )}
-          </div>
-        </div>
-        
-        <div className="card">
-          <div className="card-body">
-            <h3 className="font-medium text-gray-700 mb-2">Whisper</h3>
-            {systemStatus.components.whisper ? (
-              <div className="text-green-600">✓ 可用</div>
-            ) : (
-              <div className="text-red-600">✗ 不可用</div>
-            )}
-          </div>
-        </div>
-        
-        <div className="card">
-          <div className="card-body">
-            <h3 className="font-medium text-gray-700 mb-2">GPU</h3>
-            {systemStatus.components.gpu ? (
-              <div className="text-green-600">✓ 可用 ({systemStatus.gpu_info})</div>
-            ) : (
-              <div className="text-yellow-600">⚠ 不可用 (将使用CPU)</div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-  
-  // 渲染主要内容
-  const renderContent = () => {
-    // 如果系统组件不可用，显示错误
-    if (
-      systemStatus && 
-      (!systemStatus.components.ffmpeg || !systemStatus.components.whisper)
-    ) {
-      return (
-        <div className="bg-red-50 border border-red-200 rounded-md p-6 text-center">
-          <h2 className="text-xl font-medium text-red-700 mb-4">系统配置不完整</h2>
-          <p className="mb-4">
-            应用程序需要FFmpeg和Whisper组件才能正常工作。请检查服务器配置。
-          </p>
-        </div>
-      );
-    }
-    
-    // 步骤导航
-    const steps = [
-      { id: 1, name: '上传文件' },
-      { id: 2, name: '分析内容' },
-      { id: 3, name: '分割音频' },
-      { id: 4, name: '下载文件' },
-    ];
-    
-    return (
-      <div className="space-y-8">
-        {/* 步骤导航 */}
-        <div className="mb-8">
-          <nav className="flex justify-between">
-            {steps.map((step) => (
-              <button
-                key={step.id}
-                onClick={() => {
-                  // 只允许向后导航，或者在任务完成后导航到下载页面
-                  if (
-                    step.id <= uiState.currentStep || 
-                    (step.id === 4 && currentTask?.status === 'completed')
-                  ) {
-                    setCurrentStep(step.id);
-                  }
-                }}
-                className={`flex flex-col items-center ${
-                  step.id === uiState.currentStep
-                    ? 'text-primary-600 font-medium'
-                    : step.id < uiState.currentStep || (step.id === 4 && currentTask?.status === 'completed')
-                    ? 'text-gray-600 cursor-pointer hover:text-primary-500'
-                    : 'text-gray-400 cursor-not-allowed'
-                }`}
-                disabled={step.id > uiState.currentStep && !(step.id === 4 && currentTask?.status === 'completed')}
-              >
-                <span
-                  className={`w-10 h-10 flex items-center justify-center rounded-full mb-2 ${
-                    step.id === uiState.currentStep
-                      ? 'bg-primary-600 text-white'
-                      : step.id < uiState.currentStep || (step.id === 4 && currentTask?.status === 'completed')
-                      ? 'bg-gray-200 text-gray-700'
-                      : 'bg-gray-100 text-gray-400'
-                  }`}
-                >
-                  {step.id}
-                </span>
-                <span>{step.name}</span>
-              </button>
-            ))}
-          </nav>
-        </div>
-        
-        {/* 状态栏 */}
-        {currentTask && <StatusBar task={currentTask} />}
-        
-        {/* 步骤内容 */}
-        {uiState.currentStep === 1 && <FileUploader />}
-        {uiState.currentStep === 2 && <ModelSelector />}
-        {uiState.currentStep === 3 && <SegmentsList />}
-        {uiState.currentStep === 4 && <DownloadFiles />}
-        
-        {/* 分割功能 */}
-        {uiState.currentStep === 3 && <AudioSplitter />}
-      </div>
-    );
-  };
-  
+
   return (
     <div>
-      {/* 系统状态 */}
-      {renderSystemStatus()}
+      <h1 className="text-2xl font-semibold mb-4">音频处理控制台</h1>
       
-      {/* 主要内容 */}
-      {!loading && renderContent()}
+      {systemStatus && (
+        <div className="mb-6 p-4 bg-white rounded-lg shadow">
+          <h2 className="text-lg font-medium mb-2">系统状态</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="flex items-center">
+              <div className={`w-3 h-3 rounded-full mr-2 ${systemStatus.components.ffmpeg ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>FFmpeg: {systemStatus.components.ffmpeg ? '可用' : '不可用'}</span>
+            </div>
+            <div className="flex items-center">
+              <div className={`w-3 h-3 rounded-full mr-2 ${systemStatus.components.whisper ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>Whisper: {systemStatus.components.whisper ? '可用' : '不可用'}</span>
+            </div>
+            <div className="flex items-center">
+              <div className={`w-3 h-3 rounded-full mr-2 ${systemStatus.components.gpu ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>GPU支持: {systemStatus.components.gpu ? '可用' : '不可用'}</span>
+            </div>
+          </div>
+          {systemStatus.components.gpu && (
+            <div className="mt-2 text-sm text-gray-600">
+              {systemStatus.gpu_info}
+            </div>
+          )}
+        </div>
+      )}
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h2 className="text-xl font-medium mb-4">开始新任务</h2>
+          <p className="mb-4 text-gray-600">上传音频文件以开始处理</p>
+          <button
+            onClick={() => router.push('/upload')}
+            className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none"
+          >
+            上传音频
+          </button>
+        </div>
+        
+        {currentTask && (
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h2 className="text-xl font-medium mb-4">继续上次任务</h2>
+            <p className="mb-2 text-gray-600">
+              文件: {currentTask.filename}
+            </p>
+            <p className="mb-4 text-gray-600">
+              状态: {currentTask.status}
+            </p>
+            <button
+              onClick={() => router.push(`/tasks/${currentTask.id}`)}
+              className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none"
+            >
+              继续处理
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 } 
