@@ -19,7 +19,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# 保留lib目录，可能包含核心代码
+# lib/
 lib64/
 parts/
 sdist/
@@ -70,10 +71,15 @@ tmp/
 *.swp
 *~
 
-# 数据文件
-data/
-uploads/
-media/
+# 数据文件 - 保留目录结构，排除实际数据
+data/tasks/*
+data/uploads/*
+data/users/*
+# 保留空目录
+!data/tasks/.gitkeep
+!data/uploads/.gitkeep
+!data/users/.gitkeep
+# 排除媒体文件
 *.wav
 *.mp3
 *.ogg
@@ -81,10 +87,15 @@ media/
 *.m4a
 *.aac
 *.wma
+
+# 数据库文件 - 排除但保留结构文件
 *.db
 *.sqlite
 *.sqlite3
 *.mysql
+# 保留数据库架构/迁移文件
+!*/migrations/*.py
+!*/schema/*.sql
 
 # Node.js
 node_modules/
@@ -94,6 +105,7 @@ node_modules/
 .pnp.js
 
 # 前端构建
+# 保留frontend目录下的源代码
 frontend/.next/
 frontend/out/
 frontend/build/

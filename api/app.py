@@ -15,6 +15,7 @@ import shutil
 from flask_jwt_extended import JWTManager
 from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from dotenv import load_dotenv
+from api.auth import setup_jwt, login_required, admin_required, get_current_user
 
 # 添加项目根目录到 Python 路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -51,10 +52,13 @@ init_balance_system(app)
 # 注册API路由
 from api.routes.balance import bp as balance_bp
 from api.routes.usage import bp as usage_bp
-from api.auth import login_required, admin_required, get_current_user
+from api.routes.pricing import bp as pricing_bp
+from api.routes.analyze import bp as analyze_bp
 
 app.register_blueprint(balance_bp)
 app.register_blueprint(usage_bp)
+app.register_blueprint(pricing_bp)
+app.register_blueprint(analyze_bp)
 
 # 创建必要的目录结构
 DATA_DIR = os.path.join(project_root, "data")
@@ -144,6 +148,7 @@ def register():
         # 创建用户
         from src.balance_system.models.user import User
         from src.balance_system.db import db_session
+        from src.balance_system.services.balance_service import BalanceService
         
         # 检查邮箱是否已存在
         existing_user = db_session.query(User).filter(User.email == data['email']).first()
@@ -159,22 +164,22 @@ def register():
             email=data['email'],
             password_hash=data['password'],  # 实际应用中应该使用加密后的密码
             is_active=True,
-            is_admin=False,
-            balance=0,
-            total_charged=0,
-            total_consumed=0
+            is_admin=False
         )
         
         db_session.add(new_user)
         db_session.commit()
         db_session.refresh(new_user)
         
+        # 记录注册赠送点数
+        BalanceService.record_register_balance(new_user.id)
+        
         # 生成令牌
         access_token = create_access_token(identity=new_user.id)
         
         return jsonify({
             'status': 'success',
-            'message': '注册成功',
+            'message': '注册成功，已赠送500点数，100点=1元',
             'user': {
                 'id': new_user.id,
                 'username': new_user.username,
@@ -255,31 +260,24 @@ def get_me():
     """获取当前用户信息"""
     try:
         # 获取当前用户
-        from src.balance_system.models.user import User
-        from src.balance_system.db import db_session
-        
-        user_id = get_jwt_identity()
-        user = db_session.query(User).filter(User.id == user_id).first()
-        
+        user = get_current_user()
         if not user:
             return jsonify({
                 'status': 'error',
                 'message': '未找到用户信息'
             }), 404
         
+        # 确保user是一个字典
+        if not isinstance(user, dict):
+            return jsonify({
+                'status': 'error',
+                'message': '用户数据格式错误'
+            }), 500
+            
         # 返回用户信息
         return jsonify({
             'status': 'success',
-            'data': {
-                'id': user.id,
-                'username': user.username,
-                'email': user.email,
-                'is_active': user.is_active,
-                'is_admin': user.is_admin,
-                'balance': float(user.balance),
-                'total_charged': float(user.total_charged),
-                'total_consumed': float(user.total_consumed)
-            }
+            'data': user
         })
     except Exception as e:
         logger.exception(f"获取用户信息时出错: {str(e)}")
@@ -299,10 +297,17 @@ def update_account():
         from src.balance_system.models.user import User
         from src.balance_system.db import db_session
         
-        user_id = get_jwt_identity()
-        user = db_session.query(User).filter(User.id == user_id).first()
-        
+        user = get_current_user()
         if not user:
+            return jsonify({
+                'status': 'error',
+                'message': '未找到用户信息'
+            }), 404
+        
+        user_id = user['id']
+        db_user = db_session.query(User).filter(User.id == user_id).first()
+        
+        if not db_user:
             return jsonify({
                 'status': 'error',
                 'message': '未找到用户信息'
@@ -321,7 +326,7 @@ def update_account():
         
         # 更新用户信息
         if 'username' in data:
-            user.username = data['username']
+            db_user.username = data['username']
         
         if 'email' in data:
             # 检查邮箱是否已被其他用户使用
@@ -336,7 +341,7 @@ def update_account():
                     'message': '该邮箱已被其他用户使用'
                 }), 400
             
-            user.email = data['email']
+            db_user.email = data['email']
         
         if 'password' in data:
             # 密码长度验证
@@ -346,7 +351,7 @@ def update_account():
                     'message': '密码至少需要6个字符'
                 }), 400
             
-            user.set_password(data['password'])
+            db_user.set_password(data['password'])
         
         # 保存更新
         db_session.commit()
@@ -356,14 +361,14 @@ def update_account():
             'status': 'success',
             'message': '用户信息更新成功',
             'data': {
-                'id': user.id,
-                'username': user.username,
-                'email': user.email,
-                'is_active': user.is_active,
-                'is_admin': user.is_admin,
-                'balance': float(user.balance),
-                'total_charged': float(user.total_charged),
-                'total_consumed': float(user.total_consumed)
+                'id': db_user.id,
+                'username': db_user.username,
+                'email': db_user.email,
+                'is_active': db_user.is_active,
+                'is_admin': db_user.is_admin,
+                'balance': float(db_user.balance),
+                'total_charged': float(db_user.total_charged),
+                'total_consumed': float(db_user.total_consumed)
             }
         })
     except Exception as e:
@@ -407,13 +412,12 @@ def upload_file():
         return jsonify({"error": "未选择文件"}), 400
     
     # 获取当前用户
-    user_id = get_jwt_identity()
-    from src.balance_system.models.user import User
-    from src.balance_system.db import db_session
-    
-    user = db_session.query(User).filter(User.id == user_id).first()
+    user = get_current_user()
     if not user:
         return jsonify({"error": "未找到用户信息"}), 404
+    
+    user_id = user['id']
+    username = user['username']
     
     # 生成唯一任务ID
     task_id = str(uuid.uuid4())
@@ -435,10 +439,10 @@ def upload_file():
         "progress": 0,
         "message": "文件已上传",
         "created_at": time.time(),
-        "user_id": user.id  # 记录用户ID
+        "user_id": user_id  # 记录用户ID
     }
     
-    logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB), 任务ID: {task_id}, 用户: {user.username}")
+    logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB), 任务ID: {task_id}, 用户: {username}")
     
     return jsonify({
         "task_id": task_id,
@@ -761,9 +765,22 @@ def health_check():
 # 用户信息端点
 @app.route('/api/user/me', methods=['GET'])
 @login_required
-def get_current_user():
+def get_user_info():
     """获取当前用户信息 (与/api/auth/me功能相同，保留此路由是为了兼容性)"""
-    return get_me()
+    # 获取当前用户
+    from api.auth import get_current_user
+    user = get_current_user()
+    if not user:
+        return jsonify({
+            'status': 'error',
+            'message': '未找到用户信息'
+        }), 404
+    
+    # 返回用户信息
+    return jsonify({
+        'status': 'success',
+        'data': user
+    })
 
 if __name__ == '__main__':
     # 启动API服务

@@ -7,7 +7,8 @@ class TransactionType(enum.Enum):
     """交易类型"""
     CHARGE = "charge"  # 充值
     CONSUME = "consume"  # 消费
-    GIFT = "gift"  # 赠送
+    GIFT = "gift"      # 赠送
+    REGISTER = "register"  # 注册赠送
 
 class TransactionRecord(Base):
     """交易记录模型"""
@@ -21,6 +22,7 @@ class TransactionRecord(Base):
     description = Column(String(200), nullable=True, comment="交易描述")
     operator = Column(String(50), nullable=True, comment="操作人")
     created_at = Column(DateTime, server_default=func.now(), nullable=False, comment="创建时间")
+    expires_at = Column(DateTime, nullable=True, comment="过期时间")
     
     # 关系
     api_usages = relationship("ApiUsage", backref="transaction_record")
@@ -36,4 +38,5 @@ class TransactionRecord(Base):
             "description": self.description,
             "operator": self.operator,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
         } 

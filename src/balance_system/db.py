@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from .config import get_db_config
+from contextlib import contextmanager
 
 # 初始化日志
 logger = logging.getLogger(__name__)
@@ -31,6 +32,30 @@ db_session = scoped_session(Session)
 # 创建基类
 Base = declarative_base()
 Base.query = db_session.query_property()
+
+@contextmanager
+def get_db_session():
+    """
+    获取数据库会话的上下文管理器
+    
+    用法:
+    with get_db_session() as session:
+        # 使用session进行数据库操作
+        user = session.query(User).filter_by(id=1).first()
+    
+    Returns:
+        SQLAlchemy会话对象
+    """
+    session = Session()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"数据库会话操作失败: {str(e)}")
+        raise
+    finally:
+        session.close()
 
 def init_db():
     """初始化数据库"""

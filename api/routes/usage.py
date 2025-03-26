@@ -1,8 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 import logging
-from flask_jwt_extended import get_jwt_identity
+from api.auth import login_required, get_current_user
 from src.balance_system.services.api_usage_service import ApiUsageService
-from api.auth import login_required
 
 # 初始化日志
 logger = logging.getLogger(__name__)
@@ -15,7 +14,11 @@ bp = Blueprint('usage_bp', __name__, url_prefix='/api/usage')
 def record_api_usage():
     """记录API使用情况"""
     try:
-        user_id = get_jwt_identity()
+        user = get_current_user()
+        if not user:
+            return jsonify({'status': 'error', 'message': '用户未认证'}), 401
+            
+        user_id = user['id']
         data = request.json
         
         # 验证必要参数
@@ -74,7 +77,11 @@ def record_api_usage():
 def get_api_usage_history():
     """获取API使用历史记录"""
     try:
-        user_id = get_jwt_identity()
+        user = get_current_user()
+        if not user:
+            return jsonify({'status': 'error', 'message': '用户未认证'}), 401
+            
+        user_id = user['id']
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 10))
         
@@ -112,7 +119,11 @@ def get_api_usage_history():
 def get_api_usage_stats():
     """获取API使用统计信息"""
     try:
-        user_id = get_jwt_identity()
+        user = get_current_user()
+        if not user:
+            return jsonify({'status': 'error', 'message': '用户未认证'}), 401
+            
+        user_id = user['id']
         
         # 创建服务实例
         api_usage_service = ApiUsageService()

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { FiCpu, FiSave, FiSettings, FiChevronDown, FiChevronUp } from 'react-icons/fi';
+import { useState, useEffect } from 'react';
+import { FiCpu, FiSave, FiSettings, FiChevronDown, FiChevronUp, FiDollarSign } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import apiService from '@/lib/api';
 
@@ -17,10 +17,13 @@ export function ModelSelector() {
     setIsAnalyzing,
     setCurrentStep,
     toggleShowAdvanced,
+    modelsPricing,
+    setModelsPricing,
   } = useAppStore();
   
   // 本地状态
   const [error, setError] = useState<string | null>(null);
+  const [isLoadingPricing, setIsLoadingPricing] = useState(false);
   
   // 没有任务则显示错误
   if (!currentTask) {
@@ -33,6 +36,30 @@ export function ModelSelector() {
     );
   }
   
+  // 加载定价信息
+  useEffect(() => {
+    if (currentTask && currentTask.id) {
+      loadPricingInfo();
+    }
+  }, [currentTask]);
+  
+  // 获取定价信息
+  const loadPricingInfo = async () => {
+    try {
+      setIsLoadingPricing(true);
+      
+      // 使用任务的实际文件大小
+      const fileSizeMb = currentTask.size_mb || 0;
+      
+      const pricingData = await apiService.getModelsPricing(fileSizeMb);
+      setModelsPricing(pricingData);
+    } catch (error) {
+      console.error('获取定价信息失败:', error);
+    } finally {
+      setIsLoadingPricing(false);
+    }
+  };
+  
   // 处理音频分析
   const handleAnalyze = async () => {
     if (!currentTask) return;
@@ -40,6 +67,18 @@ export function ModelSelector() {
     try {
       setIsAnalyzing(true);
       setError(null);
+      
+      // 使用任务的实际文件大小
+      const fileSizeMb = currentTask.size_mb || 0;
+      
+      // 检查余额是否足够
+      const balanceCheck = await apiService.checkBalance(fileSizeMb, settings.modelSize);
+      
+      if (!balanceCheck.is_sufficient) {
+        setError(`余额不足，当前余额 ${balanceCheck.current_balance.toFixed(0)} 点，需要 ${balanceCheck.estimated_cost.toFixed(0)} 点。请先充值。`);
+        setIsAnalyzing(false);
+        return;
+      }
       
       // 调用分析API
       const response = await apiService.analyzeAudio(currentTask.id, settings.modelSize);
@@ -52,12 +91,28 @@ export function ModelSelector() {
         setCurrentStep(3);
       }, 1000);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('分析失败:', error);
-      setError('音频分析失败，请重试。');
+      // 检查是否为任务不存在错误
+      if (error.response && error.response.status === 400 && 
+          error.response.data && error.response.data.error === "无效的任务ID") {
+        setError('任务已过期或不存在，请返回上传页面重新上传文件');
+      } else if (error.code === 'ERR_NETWORK') {
+        setError('网络连接失败，请检查网络连接并重试');
+      } else {
+        setError('音频分析失败，请重试。');
+      }
     } finally {
       setIsAnalyzing(false);
     }
+  };
+  
+  // 获取模型定价信息
+  const getModelPricing = (size: string) => {
+    if (!modelsPricing || !modelsPricing[size]) {
+      return null;
+    }
+    return modelsPricing[size];
   };
   
   // 渲染模型选择器
@@ -91,38 +146,89 @@ export function ModelSelector() {
             选择模型大小
           </label>
           <p className="text-sm text-gray-500 mb-3">
-            更大的模型识别更准确，但处理速度更慢
+            更大的模型识别更准确，但处理速度更慢和消耗更多点数
           </p>
           
+          {currentTask && currentTask.size_mb > 0 && (
+            <p className="text-sm text-primary-600 mb-4">
+              当前文件大小: {currentTask.size_mb.toFixed(2)} MB
+            </p>
+          )}
+          
           <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            {['tiny', 'base', 'small', 'medium', 'large'].map((size) => (
-              <button
-                key={size}
-                type="button"
-                onClick={() => updateSettings({ modelSize: size })}
-                className={`flex flex-col items-center justify-center p-4 border rounded-lg hover:border-primary-400 hover:bg-primary-50 transition-colors ${
-                  settings.modelSize === size
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'border-gray-300'
-                }`}
-              >
-                <FiCpu 
-                  className={`w-6 h-6 mb-2 ${
-                    settings.modelSize === size ? 'text-primary-600' : 'text-gray-400'
-                  }`} 
-                />
-                <span className="capitalize">{size}</span>
-                <span className="text-xs text-gray-500 mt-1">
-                  {size === 'tiny' && '速度最快'}
-                  {size === 'base' && '平衡'}
-                  {size === 'small' && '较准确'}
-                  {size === 'medium' && '很准确'}
-                  {size === 'large' && '最准确'}
-                </span>
-              </button>
-            ))}
+            {['tiny', 'base', 'small', 'medium', 'large'].map((size) => {
+              const pricing = getModelPricing(size);
+              return (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={() => updateSettings({ modelSize: size })}
+                  className={`flex flex-col items-center justify-center p-4 border rounded-lg hover:border-primary-400 hover:bg-primary-50 transition-colors ${
+                    settings.modelSize === size
+                      ? 'border-primary-500 bg-primary-50'
+                      : 'border-gray-300'
+                  }`}
+                >
+                  <FiCpu 
+                    className={`w-6 h-6 mb-2 ${
+                      settings.modelSize === size ? 'text-primary-600' : 'text-gray-400'
+                    }`} 
+                  />
+                  <span className="capitalize">{size}</span>
+                  <span className="text-xs text-gray-500 mt-1">
+                    {size === 'tiny' && '速度最快'}
+                    {size === 'base' && '平衡'}
+                    {size === 'small' && '较准确'}
+                    {size === 'medium' && '很准确'}
+                    {size === 'large' && '最准确'}
+                  </span>
+                  
+                  {pricing && pricing.estimated_cost !== undefined && (
+                    <div className="mt-2 flex items-center text-xs">
+                      <FiDollarSign className="mr-1 text-green-500" />
+                      <span className="text-green-600 font-medium">
+                        {pricing.estimated_cost.toFixed(0)} 点
+                      </span>
+                    </div>
+                  )}
+                  
+                  {isLoadingPricing && !pricing && (
+                    <div className="mt-2 text-xs text-gray-400">加载中...</div>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
+        
+        {settings.modelSize && modelsPricing && modelsPricing[settings.modelSize] && (
+          <div className="p-4 bg-green-50 border border-green-200 rounded-lg mt-4">
+            <h3 className="text-sm font-medium text-green-800 flex items-center">
+              <FiDollarSign className="mr-1" />
+              费用明细 
+              {currentTask && currentTask.size_mb !== undefined && (
+                <span className="ml-2 text-xs font-normal text-green-600">
+                  (文件大小: {currentTask.size_mb.toFixed(2)} MB)
+                </span>
+              )}
+            </h3>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-green-700">
+              <div>基础费用:</div>
+              <div className="text-right">{modelsPricing[settings.modelSize]?.details?.base_price?.toFixed(0) || '0'} 点</div>
+              
+              <div>文件大小费用:</div>
+              <div className="text-right">{modelsPricing[settings.modelSize]?.details?.file_size_cost?.toFixed(0) || '0'} 点</div>
+              
+              <div>处理时长费用:</div>
+              <div className="text-right">{modelsPricing[settings.modelSize]?.details?.duration_cost?.toFixed(0) || '0'} 点</div>
+              
+              <div className="border-t border-green-200 pt-1 font-medium">总计:</div>
+              <div className="border-t border-green-200 pt-1 text-right font-medium">
+                {modelsPricing[settings.modelSize]?.estimated_cost?.toFixed(0) || '0'} 点
+              </div>
+            </div>
+          </div>
+        )}
         
         {uiState.showAdvanced && (
           <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
@@ -234,7 +340,7 @@ export function ModelSelector() {
             ) : (
               <>
                 <FiSave className="mr-2" />
-                开始分析
+                开始分析 {modelsPricing && modelsPricing[settings.modelSize]?.estimated_cost !== undefined ? `(${modelsPricing[settings.modelSize].estimated_cost.toFixed(0)}点)` : ''}
               </>
             )}
           </button>

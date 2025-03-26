@@ -10,33 +10,116 @@ from ..models.charge_package import ChargePackage
 logger = logging.getLogger(__name__)
 
 class PricingService:
+    """定价服务，负责计算API使用费用"""
+    
+    # 默认定价规则
+    DEFAULT_PRICING_RULES = {
+        'tiny': {'base_price': 0.1, 'size_factor': 0.1},
+        'base': {'base_price': 0.2, 'size_factor': 0.15},
+        'small': {'base_price': 0.3, 'size_factor': 0.2},
+        'medium': {'base_price': 0.5, 'size_factor': 0.25},
+        'large': {'base_price': 1.0, 'size_factor': 0.3}
+    }
+    
+    @staticmethod
+    def estimate_cost(file_size_mb: float, model_size: str) -> Dict[str, Any]:
+        """估算处理费用
+        
+        Args:
+            file_size_mb: 文件大小（MB）
+            model_size: 模型大小（tiny/base/small/medium/large）
+            
+        Returns:
+            Dict: 包含预估费用和详细信息的字典
+        """
+        try:
+            # 获取定价规则
+            rule = PricingService.DEFAULT_PRICING_RULES.get(model_size)
+            if not rule:
+                raise ValueError(f"不支持的模型大小: {model_size}")
+            
+            # 计算费用
+            base_price = Decimal(str(rule['base_price']))
+            size_factor = Decimal(str(rule['size_factor']))
+            file_size = Decimal(str(file_size_mb))
+            
+            # 基础费用 + 文件大小费用
+            estimated_cost = base_price + (file_size * size_factor)
+            
+            return {
+                "estimated_cost": float(estimated_cost),
+                "details": {
+                    "base_price": float(base_price),
+                    "size_factor": float(size_factor),
+                    "file_size": float(file_size),
+                    "model_size": model_size
+                }
+            }
+        except Exception as e:
+            logger.error(f"估算费用失败: {str(e)}")
+            raise
+    
     @staticmethod
     def get_pricing_rules() -> List[Dict[str, Any]]:
         """获取所有定价规则"""
-        db = db_session()
-        try:
-            rules = db.query(PricingRule).filter(PricingRule.is_active == True).all()
-            return [rule.to_dict() for rule in rules]
-        except SQLAlchemyError as e:
-            logger.error(f"查询定价规则失败: {e}")
-            raise
-        finally:
-            db.close()
+        return [
+            {
+                "model_size": size,
+                "base_price": float(rule["base_price"]),
+                "size_factor": float(rule["size_factor"])
+            }
+            for size, rule in PricingService.DEFAULT_PRICING_RULES.items()
+        ]
     
     @staticmethod
     def get_charge_packages() -> List[Dict[str, Any]]:
-        """获取所有充值套餐"""
-        db = db_session()
-        try:
-            packages = db.query(ChargePackage).filter(
-                ChargePackage.is_active == True
-            ).order_by(ChargePackage.sort_order.asc()).all()
-            return [package.to_dict() for package in packages]
-        except SQLAlchemyError as e:
-            logger.error(f"查询充值套餐失败: {e}")
-            raise
-        finally:
-            db.close()
+        """获取充值套餐"""
+        return [
+            {
+                "id": "package_1",
+                "name": "基础套餐",
+                "points": 1000,
+                "price": 10,
+                "description": "1000点数 = 10元"
+            },
+            {
+                "id": "package_2",
+                "name": "进阶套餐",
+                "points": 5000,
+                "price": 45,
+                "description": "5000点数 = 45元"
+            },
+            {
+                "id": "package_3",
+                "name": "专业套餐",
+                "points": 10000,
+                "price": 80,
+                "description": "10000点数 = 80元"
+            }
+        ]
+    
+    @staticmethod
+    def get_all_model_pricing(file_size_mb: float, api_type: str = 'analysis') -> Dict[str, Dict[str, Any]]:
+        """
+        获取所有模型的定价预估
+        
+        Args:
+            file_size_mb: 文件大小，单位MB
+            api_type: API类型，默认为'analysis'
+            
+        Returns:
+            Dict: 包含所有模型的预估费用的字典
+        """
+        result = {}
+        for model_size in ['tiny', 'base', 'small', 'medium', 'large']:
+            try:
+                cost_info = PricingService.estimate_cost(file_size_mb, model_size)
+                result[model_size] = cost_info
+            except ValueError:
+                # 如果某个模型没有定价规则，跳过
+                continue
+        
+        return result
     
     @staticmethod
     def get_price(

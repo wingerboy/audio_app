@@ -124,7 +124,7 @@ def get_current_user():
     获取当前登录用户信息
     
     Returns:
-        User: 用户对象或None
+        dict: 包含用户信息的字典，如果未登录则返回None
     """
     try:
         verify_jwt_in_request()
@@ -132,7 +132,21 @@ def get_current_user():
         
         # 获取用户信息
         with get_db_session() as session:
-            return session.query(User).filter_by(id=user_id).first()
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return None
+                
+            # 返回用户信息字典而不是ORM对象
+            return {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'is_admin': user.is_admin,
+                'balance': float(user.balance) if user.balance else 0.0,
+                'total_charged': float(user.total_charged) if user.total_charged else 0.0,
+                'total_consumed': float(user.total_consumed) if user.total_consumed else 0.0,
+                'created_at': user.created_at.isoformat() if user.created_at else None
+            }
     except Exception as e:
         logger.warning(f"获取当前用户失败: {str(e)}")
         return None 

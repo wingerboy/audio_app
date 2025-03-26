@@ -48,14 +48,27 @@ class ProductionDBConfig(BaseDBConfig):
         if missing_vars:
             raise ValueError(f"生产环境缺少必要的环境变量: {', '.join(missing_vars)}")
 
-# 配置映射
-db_config_by_name = {
-    'local': LocalDBConfig(),
-    'docker': DockerDBConfig(),
-    'production': ProductionDBConfig()
-}
+# 使用延迟加载的方式获取配置对象
+def get_config_by_name(name):
+    """根据环境名称获取相应的配置对象"""
+    config_classes = {
+        'local': LocalDBConfig,
+        'docker': DockerDBConfig,
+        'production': ProductionDBConfig
+    }
+    
+    config_class = config_classes.get(name, LocalDBConfig)
+    try:
+        return config_class()
+    except ValueError as e:
+        # 如果是因为生产环境变量缺失导致的错误，则回退到本地配置
+        if "生产环境缺少必要的环境变量" in str(e):
+            print(f"警告: {e}. 使用本地开发配置替代。")
+            return LocalDBConfig()
+        raise
 
 def get_db_config():
     """获取当前环境的数据库配置"""
     env = os.environ.get('FLASK_ENV', 'local')
-    return db_config_by_name[env] 
+    print(f"当前环境: {env}")
+    return get_config_by_name(env) 
