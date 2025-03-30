@@ -1,8 +1,11 @@
 import axios from 'axios';
 
+// 获取API基础URL
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002/api';
+
 // 创建API客户端
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:5002/api', // 直接使用后端地址，避免代理问题
+  baseURL: API_BASE_URL, // 使用环境变量中的API地址
   headers: {
     'Content-Type': 'application/json',
   },

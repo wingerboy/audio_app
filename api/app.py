@@ -32,7 +32,12 @@ logger = logging.getLogger(__name__)
 
 # 创建 Flask 应用
 app = Flask(__name__)
-CORS(app)
+# 配置CORS，允许来自所有前端域的请求
+CORS(app, resources={r"/api/*": {"origins": [
+    "http://localhost:3000",  # 本地开发环境
+    "http://127.0.0.1:3000",  # 本地开发环境(另一种写法)
+    "http://8.155.13.90:3000"  # 生产环境前端服务器
+]}})
 
 # 配置 JWT
 jwt = JWTManager(app)

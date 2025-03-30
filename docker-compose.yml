@@ -13,7 +13,8 @@ services:
       - /app/node_modules
       - /app/.next
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:5002/api
+      # 从.env读取FLASK_ENV，默认为"docker"，并据此设置API URL
+      - NEXT_PUBLIC_API_URL=${API_URL:-http://api:5002/api}
     depends_on:
       - api
     healthcheck:
@@ -33,7 +34,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
-      - FLASK_ENV=docker
+      - FLASK_ENV=${FLASK_ENV:-docker}
       - MYSQL_USER=${MYSQL_USER}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_HOST=db
