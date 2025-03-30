@@ -63,7 +63,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # 临时文件
-temp/
+# temp/    # 不排除src/temp目录
 tmp/
 .tmp/
 *.tmp
