@@ -80,8 +80,8 @@ temp_manager = get_global_manager()
 # 检查所需组件
 COMPONENTS_READY = {
     "ffmpeg": env_manager.ensure_ffmpeg(),
-    "whisper": env_manager.ensure_whisper(),
-    "gpu": env_manager.check_gpu_status()[0]
+    # "whisper": env_manager.ensure_whisper(),  # 不再需要检测Whisper
+    # "gpu": env_manager.check_gpu_status()[0]  # 不再需要检测GPU
 }
 
 # 用于跟踪任务状态的字典
@@ -388,9 +388,13 @@ def get_status():
     try:
         return jsonify({
             "status": "ok",
-            "components": COMPONENTS_READY,
-            "torch_version": env_manager.get_torch_version(),
-            "gpu_info": env_manager.get_gpu_info() if COMPONENTS_READY["gpu"] else "不可用"
+            "components": {
+                "ffmpeg": COMPONENTS_READY["ffmpeg"]
+                # "whisper": COMPONENTS_READY["whisper"],  # 不再需要检测Whisper
+                # "gpu": COMPONENTS_READY["gpu"]           # 不再需要检测GPU
+            },
+            # "torch_version": env_manager.get_torch_version(),  # 不再需要Torch版本
+            # "gpu_info": env_manager.get_gpu_info() if COMPONENTS_READY["gpu"] else "不可用"  # 不再需要GPU信息
         })
     except Exception as e:
         logger.exception(f"获取系统状态时出错: {str(e)}")
@@ -421,6 +425,24 @@ def upload_file():
     
     # 生成唯一任务ID
     task_id = str(uuid.uuid4())
+
+    def get_audio_duration(file_path):
+        """使用ffprobe获取音频/视频文件时长(秒)"""
+        cmd = [
+            "ffprobe", 
+            "-v", "error", 
+            "-show_entries", "format=duration", 
+            "-of", "default=noprint_wrappers=1:nokey=1", 
+            file_path
+        ]
+        try:
+            output = subprocess.check_output(cmd).decode("utf-8").strip()
+            return float(output)
+        except Exception as e:
+            logger.warning(f"无法获取文件时长: {str(e)}, 使用基于文件大小的估算")
+            # 如果获取失败，根据文件大小估算
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            return file_size_mb * 2  # 假设每MB约2秒音频 
     
     # 保存文件到临时目录
     filename, file_extension = os.path.splitext(secure_filename(file.filename))
@@ -429,12 +451,15 @@ def upload_file():
     
     # 记录任务信息
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    audio_duration_seconds = get_audio_duration(file_path)
     tasks[task_id] = {
         "id": task_id,
         "filename": file.filename,
         "path": file_path,
         "original_file": file_path,  # 保存原始文件路径
         "size_mb": file_size_mb,
+        "audio_duration_seconds": audio_duration_seconds,  # 添加音频时长信息
+        "audio_duration_minutes": audio_duration_seconds / 60,  # 添加音频时长（分钟）
         "status": "uploaded",
         "progress": 0,
         "message": "文件已上传",
@@ -442,12 +467,14 @@ def upload_file():
         "user_id": user_id  # 记录用户ID
     }
     
-    logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB), 任务ID: {task_id}, 用户: {username}")
+    logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB, {audio_duration_seconds:.2f} 秒), 任务ID: {task_id}, 用户: {username}")
     
     return jsonify({
         "task_id": task_id,
         "filename": file.filename,
-        "size_mb": file_size_mb
+        "size_mb": file_size_mb,
+        "audio_duration_seconds": audio_duration_seconds,  # 在响应中返回音频时长
+        "audio_duration_minutes": audio_duration_seconds / 60  # 在响应中返回音频时长（分钟）
     })
 
 @app.route('/api/analyze', methods=['POST'])
@@ -455,7 +482,7 @@ def analyze_audio():
     """分析音频内容"""
     data = request.json
     task_id = data.get('task_id')
-    model_size = data.get('model_size', 'base')
+    # model_size = data.get('model_size', 'base')  # 不再需要model_size参数
     
     if not task_id or task_id not in tasks:
         return jsonify({"error": "无效的任务ID"}), 400
@@ -498,8 +525,8 @@ def analyze_audio():
             logger.warning(f"复制音频文件失败: {str(e)}，将继续使用临时路径")
         
         # 分析音频
-        progress_callback(f"使用Whisper {model_size}模型分析音频内容...", 20)
-        audio_analyzer = AIAnalyzerAdapter(model_size=model_size)
+        progress_callback(f"使用云API分析音频内容...", 20)  # 修改提示信息
+        audio_analyzer = AIAnalyzerAdapter()  # 不再需要model_size参数
         transcription = audio_analyzer.transcribe_audio(
             audio_path, 
             progress_callback=progress_callback

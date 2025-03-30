@@ -1,10 +1,14 @@
 from flask import Blueprint, request, jsonify, current_app
 import logging
-from flask_jwt_extended import get_jwt
+from flask_jwt_extended import get_jwt, get_jwt_identity
 from src.balance_system.services.balance_service import BalanceService
 from src.balance_system.services.pricing_service import PricingService
 from functools import wraps
 from api.auth import admin_required, login_required, get_current_user
+from src.balance_system.services.user_service import UserService
+import os
+import uuid
+import subprocess
 
 # 初始化日志
 logger = logging.getLogger(__name__)
@@ -237,67 +241,63 @@ def admin_charge_balance():
 @bp.route('/check_analyze', methods=['POST'])
 @login_required
 def check_analyze_balance():
-    """
-    检查用户余额是否足够进行音频分析
-    
-    请求参数:
-        file_size_mb: 文件大小，单位MB
-        model_size: 模型大小，如'tiny', 'base', 'small', 'medium', 'large'
-    
-    返回:
-        余额是否足够，预估费用
-    """
+    """检查当前余额是否足够进行音频分析"""
     try:
-        data = request.get_json()
+        data = request.json
         if not data:
-            return jsonify({"success": False, "message": "请求数据格式错误"}), 400
-        
+            return jsonify({"error": "缺少请求数据"}), 400
+            
+        # 获取参数
         file_size_mb = data.get('file_size_mb')
-        model_size = data.get('model_size')
+        model_size = data.get('model_size', 'base')
+        task_id = data.get('task_id')  # 添加task_id参数
+        audio_duration_minutes = data.get('audio_duration_minutes')
         
         # 验证参数
-        if file_size_mb is None:
-            return jsonify({"success": False, "message": "缺少参数: file_size_mb"}), 400
-        if model_size is None:
-            return jsonify({"success": False, "message": "缺少参数: model_size"}), 400
+        if not file_size_mb and not task_id:
+            return jsonify({"error": "缺少必要参数file_size_mb或task_id"}), 400
+            
+        # 如果提供了task_id，从task中获取信息
+        if task_id:
+            from app import tasks
+            if task_id not in tasks:
+                return jsonify({"error": "任务不存在"}), 404
+                
+            task = tasks[task_id]
+            file_size_mb = task.get('size_mb')
+            audio_duration_minutes = task.get('audio_duration_minutes')
         
-        try:
-            file_size_mb = float(file_size_mb)
-        except ValueError:
-            return jsonify({"success": False, "message": "file_size_mb必须为数字"}), 400
-        
-        # 使用改进的get_current_user获取用户信息
-        user = get_current_user()
-        if not user:
-            return jsonify({"success": False, "message": "用户未认证"}), 401
-        
-        # 直接从用户信息字典获取ID
-        user_id = user['id']
-        
-        # 预估费用
-        pricing_service = PricingService()
-        cost_estimate = pricing_service.estimate_cost(file_size_mb, model_size)
-        estimated_cost = cost_estimate["estimated_cost"]
+        # 获取当前用户ID
+        user_id = get_jwt_identity()
         
         # 获取用户余额
-        balance_service = BalanceService()
-        user_balance = balance_service.get_user_balance(user_id)
-        current_balance = user_balance["balance"]
+        user_service = UserService()
+        user = user_service.get_user_by_id(user_id)
         
-        # 检查余额是否足够
+        if not user:
+            return jsonify({"error": "用户不存在"}), 404
+            
+        current_balance = user.balance
+        
+        # 估算费用
+        cost_info = PricingService.estimate_cost(
+            file_size_mb=file_size_mb, 
+            model_size=model_size,
+            audio_duration_minutes=audio_duration_minutes
+        )
+        
+        estimated_cost = cost_info["estimated_cost"]
         is_sufficient = current_balance >= estimated_cost
         
         return jsonify({
-            "success": True,
-            "data": {
-                "is_sufficient": is_sufficient,
-                "current_balance": current_balance,
-                "estimated_cost": estimated_cost,
-                "cost_details": cost_estimate["details"]
-            }
+            "is_sufficient": is_sufficient,
+            "current_balance": float(current_balance),
+            "estimated_cost": float(estimated_cost),
+            "details": cost_info["details"],
+            "task_id": task_id if task_id else None
         })
-    except ValueError as e:
-        return jsonify({"success": False, "message": str(e)}), 400
+        
     except Exception as e:
-        logger.error(f"检查余额失败: {e}", exc_info=True)
-        return jsonify({"success": False, "message": "服务器错误"}), 500 
+        logger.exception(f"检查余额失败: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+

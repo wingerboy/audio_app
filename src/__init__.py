@@ -13,7 +13,7 @@ from . import temp
 
 # 从各子模块导入常用组件用于方便访问
 from .audio import AudioConverter, AudioSplitter, SplitOptions, SegmentOptions, AudioUtils
-from .ai import TranscriptionResult, WhisperTranscriber, ContentAnalyzer, Segment
+from .ai import TranscriptionResult, ContentAnalyzer, Segment
 from .temp import TempFileManager, get_global_manager, cleanup_global_manager
 
 # 定义公开的API
@@ -32,7 +32,6 @@ __all__ = [
     
     # AI分析组件
     'TranscriptionResult',
-    'WhisperTranscriber',
     'ContentAnalyzer',
     'Segment',
     

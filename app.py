@@ -9,7 +9,7 @@ from src import AudioConverter, AudioSplitter, SplitOptions, SegmentOptions  # �
 from src.audio_processor_adapter import AudioProcessorAdapter  # 导入适配器
 from src.ai_analyzer_adapter import AIAnalyzerAdapter  # 导入适配器
 from src.temp import TempFileManager, get_global_manager, cleanup_global_manager  # 导入临时文件管理
-import torch
+# import torch  # 不再需要torch导入
 from environment_manager import EnvironmentManager
 from logging_config import LoggingConfig
 
@@ -56,14 +56,14 @@ if not env_manager.ensure_ffmpeg():
     st.error("未检测到FFmpeg，请安装FFmpeg后重试，或联系技术支持。")
     st.stop()
 
-# 检查Whisper
-if not env_manager.ensure_whisper():
-    st.error("未检测到Whisper语音识别模块，请安装openai-whisper后重试，或联系技术支持。")
-    st.stop()
+# 不再需要检查Whisper
+# if not env_manager.ensure_whisper():
+#     st.error("未检测到Whisper语音识别模块，请安装openai-whisper后重试，或联系技术支持。")
+#     st.stop()
 
-# 检查GPU状态
-has_gpu, gpu_info = env_manager.check_gpu_status()
-torch_version = env_manager.get_torch_version()
+# 不再需要检查GPU状态
+# has_gpu, gpu_info = env_manager.check_gpu_status()
+# torch_version = env_manager.get_torch_version()
 
 # 初始化临时文件管理
 temp_manager = get_global_manager()
@@ -75,17 +75,20 @@ st.title("智能音频分割工具")
 with st.sidebar:
     st.header("系统信息")
     
-    # GPU状态
-    if has_gpu:
-        st.success(f"✅ GPU可用: {gpu_info}")
-    else:
-        st.warning("⚠️ GPU不可用，将使用CPU进行处理（速度较慢）")
+    # 不再显示GPU状态
+    # if has_gpu:
+    #     st.success(f"✅ GPU可用: {gpu_info}")
+    # else:
+    #     st.warning("⚠️ GPU不可用，将使用CPU进行处理（速度较慢）")
     
-    # PyTorch信息
-    st.info(f"PyTorch版本: {torch_version}")
+    # 不再显示PyTorch信息
+    # st.info(f"PyTorch版本: {torch_version}")
     
     # FFmpeg信息
     st.success("✅ FFmpeg可用")
+    
+    # 云API信息
+    st.success("✅ 云API服务已连接")
 
     # 关于
     st.sidebar.markdown("---")
@@ -94,7 +97,7 @@ with st.sidebar:
         "智能音频分割工具可以自动分析音频/视频内容，"
         "并在合适的位置分割音频。"
     )
-    st.sidebar.markdown("🚀 使用 Whisper AI 和 FFmpeg 技术")
+    st.sidebar.markdown("🚀 使用阿里云API和FFmpeg技术")
 
 # 主界面：文件上传
 st.header("第一步：上传文件")
@@ -118,12 +121,7 @@ if uploaded_file is not None:
     st.info(f"文件大小: {file_size_mb:.2f} MB")
     
     # AI模型选择
-    st.header("第二步：选择AI模型")
-    model_size = st.selectbox(
-        "选择模型大小 (越大识别越准确，但速度越慢)",
-        options=["tiny", "base", "small", "medium", "large"],
-        index=1
-    )
+    st.header("第二步：设置分割选项")
     
     # 高级选项
     with st.expander("高级选项"):
@@ -158,7 +156,7 @@ if uploaded_file is not None:
             
             # 使用适配器而不是直接的AudioProcessor
             audio_processor = AudioProcessorAdapter()
-            audio_analyzer = AIAnalyzerAdapter(model_size=model_size)
+            audio_analyzer = AIAnalyzerAdapter()  # 不再需要model_size参数
             
             # 提取音频
             audio_path = audio_processor.extract_audio(file_path, progress_callback=update_progress)
@@ -169,7 +167,7 @@ if uploaded_file is not None:
             
             # 第二阶段：AI分析
             progress_bar.progress(20)
-            status_text.text(f"使用Whisper {model_size}模型分析音频内容...")
+            status_text.text("使用云API分析音频内容...")  # 修改提示文本
             
             # 转录音频
             transcription = audio_analyzer.transcribe_audio(

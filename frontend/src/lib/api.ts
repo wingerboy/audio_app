@@ -27,11 +27,11 @@ export interface SystemStatus {
   status: string;
   components: {
     ffmpeg: boolean;
-    whisper: boolean;
-    gpu: boolean;
+    // whisper: boolean; // 不再需要检测Whisper
+    // gpu: boolean;     // 不再需要检测GPU
   };
-  torch_version: string;
-  gpu_info: string;
+  // torch_version: string; // 不再需要Torch版本
+  // gpu_info: string;      // 不再需要GPU信息
 }
 
 export interface UploadResponse {
@@ -103,43 +103,130 @@ export interface AuthResponse {
   token?: string;
 }
 
+// 模型定价信息接口
+export interface ModelPricing {
+  estimated_cost: number;
+  details: {
+    base_fee: number;
+    duration_fee: number;
+    file_size_fee: number;
+    file_size_mb: number;
+    audio_duration_minutes: number;
+    model_size: string;
+  };
+}
+
+// 成本估算接口
+export interface CostEstimation {
+  user_id: string;
+  file_size_mb: number;
+  model_size: string;
+  audio_duration_minutes: number;
+  estimated_cost: number;
+  details: {
+    base_fee: number;
+    duration_fee: number;
+    file_size_fee: number;
+    file_size_mb: number;
+    audio_duration_minutes: number;
+    model_size: string;
+  };
+  task_id?: string;
+}
+
+// 余额检查结果接口
+export interface BalanceCheckResult {
+  is_sufficient: boolean;
+  current_balance: number;
+  estimated_cost: number;
+  details: {
+    base_fee: number;
+    duration_fee: number;
+    file_size_fee: number;
+    file_size_mb: number;
+    audio_duration_minutes: number;
+    model_size: string;
+  };
+  task_id?: string;
+}
+
 // 获取所有模型的定价信息
-async function getModelsPricing(fileSizeMb: number): Promise<any> {
-  try {
-    const response = await api.get(`/pricing/models?file_size_mb=${fileSizeMb}`);
-    return response.data.data;
-  } catch (error) {
-    console.error('获取模型定价失败:', error);
-    throw error;
+async function getModelsPricing(fileSizeMb: number, audioDurationMinutes?: number): Promise<Record<string, ModelPricing>> {
+  // 构建查询参数
+  const params = new URLSearchParams();
+  params.append('file_size_mb', fileSizeMb.toString());
+  
+  // 如果提供了音频时长，添加到参数中
+  if (audioDurationMinutes !== undefined) {
+    params.append('audio_duration_minutes', audioDurationMinutes.toString());
   }
+  
+  const response = await api.get(`/pricing/models?${params.toString()}`);
+  return response.data;
 }
 
 // 获取特定模型的定价估算
-async function estimateCost(fileSizeMb: number, modelSize: string): Promise<any> {
-  try {
-    const response = await api.post('/pricing/estimate', {
-      file_size_mb: fileSizeMb,
-      model_size: modelSize,
-    });
-    return response.data.data;
-  } catch (error) {
-    console.error('获取模型定价失败:', error);
-    throw error;
+async function estimateCost(options: {taskId?: string, fileSizeMb?: number, modelSize: string, audioDurationMinutes?: number}): Promise<CostEstimation> {
+  const { taskId, fileSizeMb, modelSize, audioDurationMinutes } = options;
+  
+  // 必须提供taskId或fileSizeMb
+  if (!taskId && fileSizeMb === undefined) {
+    throw new Error('必须提供taskId或fileSizeMb');
   }
+  
+  const data: any = {
+    model_size: modelSize
+  };
+  
+  // 添加task_id
+  if (taskId) {
+    data.task_id = taskId;
+  }
+  
+  // 添加file_size_mb
+  if (fileSizeMb !== undefined) {
+    data.file_size_mb = fileSizeMb;
+  }
+  
+  // 如果提供了音频时长，添加到参数中
+  if (audioDurationMinutes !== undefined) {
+    data.audio_duration_minutes = audioDurationMinutes;
+  }
+  
+  const response = await api.post('/pricing/estimate', data);
+  return response.data;
 }
 
 // 检查用户余额是否足够进行音频分析
-async function checkBalance(fileSizeMb: number, modelSize: string): Promise<any> {
-  try {
-    const response = await api.post('/balance/check_analyze', {
-      file_size_mb: fileSizeMb,
-      model_size: modelSize,
-    });
-    return response.data.data;
-  } catch (error) {
-    console.error('检查余额失败:', error);
-    throw error;
+async function checkBalance(options: {taskId?: string, fileSizeMb?: number, modelSize: string, audioDurationMinutes?: number}): Promise<BalanceCheckResult> {
+  const { taskId, fileSizeMb, modelSize, audioDurationMinutes } = options;
+  
+  // 必须提供taskId或fileSizeMb
+  if (!taskId && fileSizeMb === undefined) {
+    throw new Error('必须提供taskId或fileSizeMb');
   }
+  
+  const data: any = {
+    model_size: modelSize
+  };
+  
+  // 添加task_id
+  if (taskId) {
+    data.task_id = taskId;
+  }
+  
+  // 添加file_size_mb
+  if (fileSizeMb !== undefined) {
+    data.file_size_mb = fileSizeMb;
+  }
+  
+  // 如果提供了音频时长，添加到参数中
+  if (audioDurationMinutes !== undefined) {
+    data.audio_duration_minutes = audioDurationMinutes;
+  }
+  
+  const response = await api.post('/balance/check_analyze', data);
+  return response.data;
 }
 
 // API方法
@@ -214,10 +301,9 @@ export const apiService = {
   },
 
   // 分析音频内容
-  analyzeAudio: async (taskId: string, modelSize: string = 'base'): Promise<AnalyzeResponse> => {
+  analyzeAudio: async (taskId: string): Promise<AnalyzeResponse> => {
     const response = await api.post('/analyze', {
-      task_id: taskId,
-      model_size: modelSize,
+      task_id: taskId
     });
     return response.data;
   },

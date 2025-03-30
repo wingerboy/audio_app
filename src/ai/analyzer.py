@@ -3,7 +3,7 @@
 
 import os
 import re
-import torch
+# import torch  # 注释掉torch导入
 import logging
 from logging_config import LoggingConfig
 from pathlib import Path
@@ -69,8 +69,8 @@ class ContentAnalyzer:
         # 关键词提取（简化版）
         keywords = self._extract_keywords(transcript)
         
-        # 情感分析（如果可用）
-        sentiment = self._analyze_sentiment(transcript)
+        # 情感分析不再使用，返回基本信息
+        sentiment = {"label": "unknown", "score": 0}
         
         return {
             "word_count": word_count,
@@ -112,7 +112,7 @@ class ContentAnalyzer:
     
     def _analyze_sentiment(self, text):
         """
-        简单的情感分析
+        简单的情感分析 - 已弃用，使用云API不需要本地情感分析
         
         Args:
             text: 输入文本
@@ -120,25 +120,11 @@ class ContentAnalyzer:
         Returns:
             dict: 情感分析结果
         """
-        try:
-            from transformers import pipeline
-            
-            self.logger.info("使用transformers进行情感分析")
-            # 使用预训练的情感分析模型
-            sentiment_analyzer = pipeline("sentiment-analysis")
-            result = sentiment_analyzer(text[:512])[0]  # 限制文本长度
-            
-            return {
-                "label": result["label"],
-                "score": result["score"]
-            }
-        except (ImportError, Exception) as e:
-            self.logger.debug(f"无法使用transformers进行情感分析: {str(e)}")
-            # 如果无法使用高级情感分析，返回空结果
-            return {"label": "unknown", "score": 0}
+        self.logger.debug("情感分析功能已弃用，返回默认结果")
+        return {"label": "unknown", "score": 0}
 
 class SpeakerDiarization:
-    """说话人分割类，用于识别不同说话人的音频段落"""
+    """说话人分割类 - 已弃用，使用云API不需要本地说话人分割"""
     
     def __init__(self, model_name=None, device=None):
         """
@@ -150,42 +136,18 @@ class SpeakerDiarization:
         """
         self.logger = LoggingConfig.get_logger(__name__)
         self.model_name = model_name or "pyannote/speaker-diarization"
-        
-        # 设置设备
-        if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            self.device = device
-            
+        self.device = "cpu"  # 固定为CPU，不再使用GPU
         self.model = None
-        self.logger.info(f"初始化说话人分割: 模型={self.model_name}, 设备={self.device}")
+        self.logger.info("说话人分割功能已弃用，使用云API不需要本地说话人分割")
     
     def load_model(self):
-        """加载说话人分割模型"""
-        if self.model is not None:
-            return
-            
-        try:
-            self.logger.info(f"正在加载说话人分割模型...")
-            from pyannote.audio import Pipeline
-            
-            # 检查是否有访问权限（Hugging Face令牌）
-            hf_token = os.environ.get("HF_TOKEN")
-            
-            self.model = Pipeline.from_pretrained(
-                self.model_name,
-                use_auth_token=hf_token
-            ).to(self.device)
-            
-            self.logger.info(f"说话人分割模型加载完成")
-            
-        except Exception as e:
-            self.logger.error(f"加载说话人分割模型失败: {str(e)}")
-            raise RuntimeError(f"加载说话人分割模型失败: {str(e)}")
+        """加载说话人分割模型 - 已弃用"""
+        self.logger.warning("说话人分割功能已弃用，不会加载模型")
+        return False
     
     def process(self, audio_path, min_speakers=1, max_speakers=None):
         """
-        处理音频文件，识别不同说话人
+        处理音频文件，识别不同说话人 - 已弃用
         
         Args:
             audio_path: 音频文件路径
@@ -193,86 +155,30 @@ class SpeakerDiarization:
             max_speakers: 最大说话人数（None为自动检测）
             
         Returns:
-            list: 说话人分割结果，每个元素为 (start, end, speaker_id)
+            list: 空列表，功能已弃用
         """
-        if not os.path.exists(audio_path):
-            self.logger.error(f"音频文件不存在: {audio_path}")
-            return []
-            
-        self.load_model()
-        
-        try:
-            self.logger.info(f"开始说话人分割: {Path(audio_path).name}")
-            
-            # 设置参数
-            diarization_options = {}
-            if min_speakers is not None and min_speakers > 0:
-                diarization_options["min_speakers"] = min_speakers
-            if max_speakers is not None and max_speakers > 0:
-                diarization_options["max_speakers"] = max_speakers
-                
-            # 执行分割
-            diarization = self.model(audio_path, **diarization_options)
-            
-            # 转换结果
-            results = []
-            for turn, _, speaker in diarization.itertracks(yield_label=True):
-                results.append((turn.start, turn.end, speaker))
-            
-            self.logger.info(f"说话人分割完成: 识别到 {len(set(speaker for _, _, speaker in results))} 个说话人")
-            return results
-            
-        except Exception as e:
-            self.logger.exception(f"说话人分割出错: {str(e)}")
-            return []
+        self.logger.warning("说话人分割功能已弃用，返回空结果")
+        return []
     
     def merge_with_transcript(self, diarization_results, transcript_segments):
         """
-        将说话人分割结果与转录文本合并
+        将说话人分割结果与转录文本合并 - 已弃用
         
         Args:
-            diarization_results: 说话人分割结果 [(start, end, speaker_id), ...]
-            transcript_segments: 转录文本分段 [{"start": start, "end": end, "text": text}, ...]
+            diarization_results: 说话人分割结果
+            transcript_segments: 转录文本分段
             
         Returns:
-            list: 合并后的段落列表 [Segment对象, ...]
+            list: 原始文本分段，不附加说话人信息
         """
-        if not diarization_results or not transcript_segments:
-            return []
-            
-        merged_segments = []
-        
+        self.logger.warning("说话人分割功能已弃用，返回原始文本分段")
+        # 简单转换为Segment对象
+        segments = []
         for ts in transcript_segments:
-            ts_start = ts.get("start", 0)
-            ts_end = ts.get("end", 0)
-            ts_text = ts.get("text", "")
-            
-            # 找出与当前文本段重叠最多的说话人
-            speaker_overlaps = {}
-            
-            for dr_start, dr_end, dr_speaker in diarization_results:
-                # 计算重叠
-                overlap_start = max(ts_start, dr_start)
-                overlap_end = min(ts_end, dr_end)
-                overlap = max(0, overlap_end - overlap_start)
-                
-                if overlap > 0:
-                    speaker_overlaps[dr_speaker] = speaker_overlaps.get(dr_speaker, 0) + overlap
-            
-            # 选择重叠最多的说话人
-            speaker = None
-            if speaker_overlaps:
-                speaker = max(speaker_overlaps.items(), key=lambda x: x[1])[0]
-            
-            # 创建合并后的段落
-            segment = Segment(
-                start=ts_start,
-                end=ts_end,
-                text=ts_text,
-                speaker=speaker,
+            segments.append(Segment(
+                start=ts.get("start", 0),
+                end=ts.get("end", 0),
+                text=ts.get("text", ""),
                 confidence=ts.get("confidence", 0.0)
-            )
-            
-            merged_segments.append(segment)
-        
-        return merged_segments 
+            ))
+        return segments 

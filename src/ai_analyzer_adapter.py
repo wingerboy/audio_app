@@ -2,44 +2,45 @@
 # -*- coding: utf-8 -*-
 
 import os
-import torch
+# import torch  # 注释掉torch导入
 import logging
 from logging_config import LoggingConfig
 
-# 导入新的AI分析组件
-from .ai import WhisperTranscriber, ContentAnalyzer
+# 导入新的AI分析组件和转录器工厂
+from .ai import ContentAnalyzer
+from .ai.transcriber import TranscriberFactory
 
 class AIAnalyzerAdapter:
     """
     适配器类，提供与旧版AudioAnalyzer兼容的接口，但内部使用新的AI分析组件
     """
     
-    def __init__(self, model_size="base"):
+    def __init__(self, transcriber_type="dashscope"):
         """
-        使用指定大小的Whisper模型初始化音频分析器
+        初始化音频分析器
         
         Args:
-            model_size: 模型大小，可选tiny/base/small/medium/large
+            transcriber_type: 转录器类型，默认为"dashscope"
         """
         self.logger = LoggingConfig.get_logger(__name__)
-        self.model_size = model_size
         
-        # 检查GPU状态并记录日志
-        self._log_gpu_status()
+        # 不再需要检查GPU状态
+        # self._log_gpu_status()
         
-        # 选择设备
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # 不再需要设置设备
+        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cpu"  # 默认使用CPU，云API不需要GPU
         
-        # 创建转录器和内容分析器
-        self.transcriber = WhisperTranscriber(
-            model_name=model_size,
-            device=self.device
-        )
+        # 使用工厂创建转录器，明确指定使用DashScopeTranscriber
+        self.transcriber = TranscriberFactory.create(transcriber_type=transcriber_type)
         
         self.content_analyzer = ContentAnalyzer()
         
-        self.logger.info(f"初始化AI分析适配器: 模型={model_size}, 设备={self.device}")
+        transcriber_name = self.transcriber.__class__.__name__
+        self.logger.info(f"初始化AI分析适配器: 使用{transcriber_name}, 设备={self.device}")
     
+    # 注释掉不再需要的GPU检测函数
+    '''
     def _log_gpu_status(self):
         """记录GPU状态信息"""
         self.logger.debug(f"CUDA是否可用: {torch.cuda.is_available()}")
@@ -55,8 +56,9 @@ class AIAnalyzerAdapter:
             except Exception as e:
                 self.logger.warning(f"获取GPU内存信息失败: {e}")
         else:
-            self.logger.warning("未检测到可用的GPU。转录将使用CPU，这可能会很慢。")
+            self.logger.warning("未检测到可用的GPU。如使用本地模型将使用CPU，这可能会很慢。")
             self.logger.info("如果您有NVIDIA GPU，请确保正确安装了CUDA和相应版本的PyTorch。")
+    '''
     
     def transcribe_audio(self, audio_path, language=None, progress_callback=None):
         """

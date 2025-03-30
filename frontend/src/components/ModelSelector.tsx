@@ -9,6 +9,112 @@ export function ModelSelector() {
   // 使用应用状态
   const {
     currentTask,
+    setIsAnalyzing,
+    setCurrentStep,
+    setSegments
+  } = useAppStore();
+  
+  // 本地状态
+  const [error, setError] = useState<string | null>(null);
+  
+  // 没有任务则显示错误
+  if (!currentTask) {
+    return (
+      <div className="card">
+        <div className="card-body">
+          <p className="text-red-600">请先上传文件</p>
+        </div>
+      </div>
+    );
+  }
+  
+  // 处理音频分析 - 简化版，使用API服务不需要模型选择
+  const handleAnalyze = async () => {
+    if (!currentTask) return;
+    
+    try {
+      setIsAnalyzing(true);
+      setError(null);
+      
+      // 检查余额是否足够
+      try {
+        const balanceCheck = await apiService.checkBalance({
+          taskId: currentTask.id,
+          modelSize: 'base'  // 固定使用base模型
+        });
+        
+        if (!balanceCheck.is_sufficient) {
+          setError(`余额不足，当前余额 ${balanceCheck.current_balance.toFixed(0)} 点，需要 ${balanceCheck.estimated_cost.toFixed(0)} 点。请先充值。`);
+          setIsAnalyzing(false);
+          return;
+        }
+      } catch (error) {
+        console.error('检查余额失败:', error);
+        // 即使检查余额失败，我们依然尝试分析
+      }
+      
+      // 调用分析API - 不再需要传递model_size参数
+      const response = await apiService.analyzeAudio(currentTask.id);
+      
+      // 更新分段数据
+      setSegments(response.segments);
+      
+      // 转到下一步
+      setTimeout(() => {
+        setCurrentStep(3);
+      }, 1000);
+      
+    } catch (error: any) {
+      console.error('分析失败:', error);
+      // 检查是否为任务不存在错误
+      if (error.response && error.response.status === 400 && 
+          error.response.data && error.response.data.error === "无效的任务ID") {
+        setError('任务已过期或不存在，请返回上传页面重新上传文件');
+      } else if (error.code === 'ERR_NETWORK') {
+        setError('网络连接失败，请检查网络连接并重试');
+      } else {
+        setError('音频分析失败，请重试。');
+      }
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+  
+  // 渲染简化的模型选择器
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h2 className="text-xl font-medium">开始音频分析</h2>
+      </div>
+      
+      <div className="card-body">
+        <p className="mb-4">点击下方按钮开始音频内容分析，分析完成后可以查看结果并分割音频。</p>
+        
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-500 p-3 rounded mb-4">
+            {error}
+          </div>
+        )}
+        
+        <button
+          type="button"
+          onClick={handleAnalyze}
+          className="btn btn-primary w-full flex justify-center items-center"
+          disabled={!currentTask}
+        >
+          <FiSave className="mr-2" />
+          开始分析
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* 原始复杂ModelSelector组件已注释掉
+export function ModelSelector() {
+  // 使用应用状态
+  const {
+    currentTask,
     settings,
     updateSettings,
     segments,
@@ -348,4 +454,5 @@ export function ModelSelector() {
       </div>
     </div>
   );
-} 
+}
+*/ 

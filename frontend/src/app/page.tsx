@@ -120,20 +120,7 @@ function MainAppContent() {
               <span className={`w-3 h-3 rounded-full ${systemStatus.components.ffmpeg ? 'bg-green-500' : 'bg-red-500'}`}></span>
               <span>FFmpeg: <strong>{systemStatus.components.ffmpeg ? '可用' : '不可用'}</strong></span>
             </div>
-            <div className={`system-status ${systemStatus.components.whisper ? 'system-status-available' : 'system-status-unavailable'}`}>
-              <span className={`w-3 h-3 rounded-full ${systemStatus.components.whisper ? 'bg-green-500' : 'bg-red-500'}`}></span>
-              <span>Whisper: <strong>{systemStatus.components.whisper ? '可用' : '不可用'}</strong></span>
-            </div>
-            <div className={`system-status ${systemStatus.components.gpu ? 'system-status-available' : 'system-status-unavailable'}`}>
-              <span className={`w-3 h-3 rounded-full ${systemStatus.components.gpu ? 'bg-green-500' : 'bg-red-500'}`}></span>
-              <span>GPU支持: <strong>{systemStatus.components.gpu ? '可用' : '不可用'}</strong></span>
-            </div>
           </div>
-          {systemStatus.components.gpu && (
-            <div className="mt-4 text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700 p-3 rounded">
-              {systemStatus.gpu_info}
-            </div>
-          )}
         </div>
       )}
       

@@ -24,87 +24,96 @@ class EnvironmentManager:
     @staticmethod
     def check_gpu():
         """
-        检查GPU状态并输出详细信息
+        检查GPU状态并输出详细信息 - 已废弃，不再需要GPU
         
         Returns:
             bool: GPU是否可用
         """
-        logger.info("===== GPU状态检查 =====")
-        
-        try:
-            import torch
-            
-            # 检查PyTorch版本
-            logger.info(f"PyTorch版本: {torch.__version__}")
-            
-            # 检查CUDA是否可用
-            cuda_available = torch.cuda.is_available()
-            logger.info(f"CUDA是否可用: {cuda_available}")
-            
-            if cuda_available:
-                # 显示CUDA版本
-                logger.info(f"CUDA版本: {torch.version.cuda}")
-                
-                # 显示可用的GPU数量
-                gpu_count = torch.cuda.device_count()
-                logger.info(f"GPU数量: {gpu_count}")
-                
-                # 显示当前GPU
-                current_device = torch.cuda.current_device()
-                logger.info(f"当前GPU: {current_device}")
-                
-                # 显示GPU名称
-                for i in range(gpu_count):
-                    logger.info(f"GPU #{i}: {torch.cuda.get_device_name(i)}")
-                    
-                # 尝试获取GPU内存信息
-                try:
-                    for i in range(gpu_count):
-                        props = torch.cuda.get_device_properties(i)
-                        total_memory = props.total_memory / 1024 / 1024 / 1024
-                        logger.info(f"GPU #{i} 总内存: {total_memory:.2f} GB")
-                except Exception as e:
-                    logger.error(f"获取GPU内存信息时出错: {e}")
-            else:
-                logger.warning("没有检测到可用的GPU")
-                
-            logger.info("======================")
-            return cuda_available
-            
-        except ImportError:
-            logger.error("未安装PyTorch，无法检测GPU")
-            logger.info("请运行 python -m pip install torch 安装PyTorch")
-            return False
-        except Exception as e:
-            logger.error(f"检测GPU时出错: {e}")
-            return False
+        logger.info("不再检查GPU状态，使用云API不需要GPU")
+        return False
+    
+    @staticmethod
+    def check_gpu_status():
+        """检查GPU是否可用 - 已废弃，使用云API不需要GPU"""
+        logger.info("不再检查GPU状态，使用云API不需要GPU")
+        return False, "不可用（使用云API）"
     
     @staticmethod
     def check_pytorch():
         """
-        检查PyTorch安装状态
+        检查PyTorch安装状态 - 已废弃，使用云API不需要PyTorch
         
         Returns:
             bool: PyTorch是否可用且CUDA支持正常
         """
-        try:
-            import torch
-            logger.info(f"PyTorch版本: {torch.__version__}")
-            logger.info(f"CUDA是否可用: {torch.cuda.is_available()}")
+        logger.info("不再检查PyTorch，使用云API不需要PyTorch")
+        return False
+    
+    @staticmethod
+    def get_torch_version():
+        """返回PyTorch版本 - 已废弃，使用云API不需要PyTorch"""
+        return "不可用（使用云API）"
+    
+    @staticmethod
+    def get_gpu_info():
+        """返回GPU信息 - 已废弃，使用云API不需要GPU"""
+        return "不可用（使用云API）"
+    
+    @staticmethod
+    def ensure_whisper():
+        """确保Whisper模型可用 - 已废弃，使用云API不需要Whisper"""
+        logger.info("使用云API，不再需要Whisper模型")
+        return False
+    
+    @staticmethod
+    def ensure_ffmpeg():
+        """
+        确保FFmpeg可用
+        
+        Returns:
+            bool: FFmpeg是否可用
+        """
+        # 检查是否已安装
+        if EnvironmentManager.check_ffmpeg():
+            return True
             
-            if torch.cuda.is_available():
-                logger.info(f"CUDA版本: {torch.version.cuda}")
-                logger.info(f"cuDNN版本: {torch.backends.cudnn.version()}")
-                logger.info(f"GPU型号: {torch.cuda.get_device_name(0)}")
+        # 尝试安装FFmpeg
+        logger.info("尝试安装FFmpeg...")
+        if platform.system() == 'Windows':
+            success = EnvironmentManager._install_ffmpeg_windows()
+        elif platform.system() == 'Darwin':  # macOS
+            success = EnvironmentManager._install_ffmpeg_macos()
+        elif platform.system() == 'Linux':
+            success = EnvironmentManager._install_ffmpeg_linux()
+        else:
+            logger.error(f"不支持的操作系统: {platform.system()}")
+            return False
+            
+        # 安装后再次检查
+        return EnvironmentManager.check_ffmpeg() if success else False
+    
+    @staticmethod
+    def check_ffmpeg():
+        """
+        检查FFmpeg是否已安装
+        
+        Returns:
+            bool: FFmpeg是否可用
+        """
+        try:
+            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+            if result.returncode == 0:
+                version_line = result.stdout.split('\n')[0]
+                logger.info(f"✅ FFmpeg已安装: {version_line}")
                 return True
             else:
-                logger.warning("PyTorch已安装，但CUDA不可用")
+                logger.warning("❌ FFmpeg似乎已安装但返回错误")
                 return False
-        except ImportError:
-            logger.error("未安装PyTorch")
+        except FileNotFoundError:
+            logger.warning("❌ FFmpeg未安装或不在PATH中")
             return False
         except Exception as e:
-            logger.error(f"检查PyTorch时出错: {e}")
+            logger.error(f"❌ 检查FFmpeg时出错: {str(e)}")
             return False
     
     @staticmethod
@@ -168,30 +177,6 @@ class EnvironmentManager:
         
         logger.warning("⚠️ 无法确定CUDA版本，将使用兼容性最好的版本")
         return None
-    
-    @staticmethod
-    def check_ffmpeg():
-        """
-        检查FFmpeg是否已安装
-        
-        Returns:
-            bool: FFmpeg是否可用
-        """
-        try:
-            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-            if result.returncode == 0:
-                version_line = result.stdout.split('\n')[0]
-                logger.info(f"✅ FFmpeg已安装: {version_line}")
-                return True
-            else:
-                logger.warning("❌ FFmpeg似乎已安装但返回错误")
-                return False
-        except FileNotFoundError:
-            logger.warning("❌ FFmpeg未安装或不在PATH中")
-            return False
-        except Exception as e:
-            logger.error(f"❌ 检查FFmpeg时出错: {str(e)}")
-            return False
     
     @staticmethod
     def install_pytorch():
@@ -602,144 +587,6 @@ if torch.cuda.is_available():
         
         except Exception as e:
             logger.error(f"安装FFmpeg时出错: {str(e)}")
-            return False
-    
-    @staticmethod
-    def ensure_ffmpeg():
-        """
-        确保FFmpeg可用，如果未安装则尝试安装
-        
-        Returns:
-            bool: FFmpeg是否可用
-        """
-        # 先检查FFmpeg是否已安装
-        if EnvironmentManager.check_ffmpeg():
-            logger.info("FFmpeg已安装且可用")
-            return True
-        
-        # 如果未安装，尝试进行安装
-        logger.warning("未检测到FFmpeg，尝试自动安装...")
-        install_success = EnvironmentManager.install_ffmpeg()
-        
-        if install_success:
-            logger.info("FFmpeg已成功安装")
-            return True
-        else:
-            logger.error("FFmpeg安装失败，请手动安装FFmpeg")
-            return False
-    
-    @staticmethod
-    def check_gpu_status():
-        """
-        检查GPU状态，返回GPU可用性和信息
-        
-        Returns:
-            tuple: (是否可用, GPU信息)
-        """
-        try:
-            import torch
-            
-            cuda_available = torch.cuda.is_available()
-            
-            if cuda_available:
-                # 获取GPU信息
-                gpu_name = torch.cuda.get_device_name(0)
-                gpu_count = torch.cuda.device_count()
-                
-                # 尝试获取内存信息
-                try:
-                    props = torch.cuda.get_device_properties(0)
-                    total_memory = props.total_memory / 1024 / 1024 / 1024
-                    gpu_info = f"{gpu_name} ({total_memory:.1f} GB)"
-                except:
-                    gpu_info = gpu_name
-                
-                if gpu_count > 1:
-                    gpu_info += f" (+{gpu_count-1} 个GPU)"
-                
-                return True, gpu_info
-            else:
-                return False, "无可用GPU"
-                
-        except ImportError:
-            return False, "PyTorch未安装"
-        except Exception as e:
-            logger.error(f"获取GPU状态时出错: {e}")
-            return False, f"检测出错: {str(e)}"
-    
-    @staticmethod
-    def get_torch_version():
-        """
-        获取PyTorch版本信息
-        
-        Returns:
-            str: 版本信息
-        """
-        try:
-            import torch
-            version = torch.__version__
-            
-            # 添加CUDA信息
-            if torch.cuda.is_available():
-                version += f" (CUDA {torch.version.cuda})"
-            else:
-                version += " (CPU only)"
-                
-            return version
-        except ImportError:
-            return "未安装"
-        except Exception as e:
-            logger.error(f"获取PyTorch版本时出错: {e}")
-            return "未知"
-    
-    @staticmethod
-    def check_whisper():
-        """
-        检查Whisper模型是否已安装
-        
-        Returns:
-            bool: Whisper是否可用
-        """
-        try:
-            import whisper
-            logger.info(f"✅ Whisper已安装: {whisper.__version__}")
-            return True
-        except ImportError:
-            logger.warning("❌ Whisper未安装")
-            return False
-        except Exception as e:
-            logger.error(f"❌ 检查Whisper时出错: {str(e)}")
-            return False
-    
-    @staticmethod
-    def ensure_whisper():
-        """
-        确保Whisper模型可用，如果未安装则尝试安装
-        
-        Returns:
-            bool: Whisper是否可用
-        """
-        # 先检查Whisper是否已安装
-        if EnvironmentManager.check_whisper():
-            logger.info("Whisper已安装且可用")
-            return True
-        
-        # 如果未安装，尝试进行安装
-        logger.warning("未检测到Whisper，尝试自动安装...")
-        try:
-            import subprocess
-            logger.info("正在安装openai-whisper...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "openai-whisper"])
-            
-            # 验证安装
-            if EnvironmentManager.check_whisper():
-                logger.info("✅ Whisper已成功安装")
-                return True
-            else:
-                logger.error("❌ Whisper安装失败，请手动安装")
-                return False
-        except Exception as e:
-            logger.error(f"❌ 安装Whisper时出错: {str(e)}")
             return False
     
     @staticmethod

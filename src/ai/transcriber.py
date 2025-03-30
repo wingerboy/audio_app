@@ -2,12 +2,26 @@
 # -*- coding: utf-8 -*-
 
 import os
-import torch
+# import torch  # 注释掉torch导入
 import logging
 import concurrent.futures
 from pathlib import Path
-from logging_config import LoggingConfig
-from ..temp import TempFileManager
+# 删除LoggingConfig导入，使用标准logging
+# from logging_config import LoggingConfig
+# 相对导入会在直接运行文件时失败
+
+import json
+import time
+import threading
+import requests
+import uuid
+import tempfile
+
+# 配置logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 class TranscriptionResult:
     """转录结果类"""
@@ -26,7 +40,8 @@ class BaseTranscriber:
     """转录器基类，定义转录接口"""
     
     def __init__(self):
-        self.logger = LoggingConfig.get_logger(__name__)
+        # 使用标准logging模块
+        self.logger = logging.getLogger(__name__)
     
     def transcribe(self, audio_path):
         """
@@ -68,48 +83,286 @@ class BaseTranscriber:
         
         return results
 
-class WhisperTranscriber(BaseTranscriber):
-    """使用OpenAI Whisper模型的转录器"""
+
+class DashScopeTranscriber(BaseTranscriber):
+    """使用达摩院DashScope转录服务的转录器"""
     
-    def __init__(self, model_name="base", device=None, language=None):
+    def __init__(self, api_key=None, oss_access_key_id=None, oss_access_key_secret=None, model='paraformer-v1'):
         """
-        初始化Whisper转录器
+        初始化DashScope转录器
         
         Args:
-            model_name: 模型大小名称 "tiny", "base", "small", "medium", "large"
-            device: 计算设备 "cpu", "cuda", None (自动检测)
-            language: 语言代码，如"zh"为中文，None为自动检测
+            api_key: DashScope API密钥
+            oss_access_key_id: 阿里云OSS访问密钥ID
+            oss_access_key_secret: 阿里云OSS访问密钥Secret
+            model: 使用的模型，默认为'paraformer-v1'
         """
         super().__init__()
-        self.model_name = model_name
-        self.language = language
+        # from dotenv import load_dotenv
+        # load_dotenv()
+        self.api_key = api_key or os.environ.get("DASHSCOPE_API_KEY")
+        self.oss_access_key_id = oss_access_key_id or os.environ.get("ALIYUN_ACCESS_KEY_ID")
+        self.oss_access_key_secret = oss_access_key_secret or os.environ.get("ALIYUN_ACCESS_KEY_SECRET")
+        self.model = model
+        self.bucket_name = 'wingerboy-audio-app-online'
+        self.endpoint = "https://oss-cn-hangzhou.aliyuncs.com"
+        self.region = "cn-hangzhou"
         
-        # 自动检测设备
-        if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            self.device = device
-            
-        self.model = None
-        self.logger.info(f"初始化Whisper转录器: 模型={model_name}, 设备={self.device}, 语言={language or '自动检测'}")
+        self.logger.info(f"初始化DashScope转录器: 模型={model}")
+        
+        if not self.api_key:
+            self.logger.warning("未设置DashScope API密钥，请在环境变量或初始化参数中设置")
+        
+        if not self.oss_access_key_id or not self.oss_access_key_secret:
+            self.logger.warning("未设置OSS访问密钥，请在环境变量或初始化参数中设置")
     
-    def load_model(self):
-        """加载Whisper模型"""
-        if self.model is not None:
-            return
+    def _upload_to_oss(self, audio_path):
+        """
+        将音频文件上传到OSS并返回签名URL
+        
+        Args:
+            audio_path: 音频文件路径
             
+        Returns:
+            str: 签名后的OSS URL
+        """
         try:
-            import whisper
-            self.logger.info(f"正在加载Whisper模型 '{self.model_name}'...")
-            self.model = whisper.load_model(self.model_name, device=self.device)
-            self.logger.info(f"Whisper模型 '{self.model_name}' 加载完成")
+            import oss2
+            from oss2.credentials import StaticCredentialsProvider
+            
+            # 禁用系统代理设置
+            original_http_proxy = os.environ.get('http_proxy')
+            original_https_proxy = os.environ.get('https_proxy')
+            
+            if 'http_proxy' in os.environ:
+                del os.environ['http_proxy']
+            if 'https_proxy' in os.environ:
+                del os.environ['https_proxy']
+            
+            # 创建凭证提供者
+            creds = StaticCredentialsProvider(
+                access_key_id=self.oss_access_key_id,
+                access_key_secret=self.oss_access_key_secret
+            )
+            
+            # 创建认证对象
+            auth = oss2.ProviderAuthV4(creds)
+            
+            # 创建Bucket对象
+            bucket = oss2.Bucket(auth, self.endpoint, self.bucket_name, region=self.region)
+            
+            # 生成唯一的对象名
+            object_name = f"audio_{uuid.uuid4().hex}_{os.path.basename(audio_path)}"
+            
+            # 上传文件
+            self.logger.info(f"正在上传音频文件到OSS: {object_name}")
+            result = bucket.put_object_from_file(object_name, audio_path)
+            
+            if result.status != 200:
+                self.logger.error(f"上传失败，状态码: {result.status}")
+                return None
+            
+            # 生成签名URL，有效期1小时
+            download_url = bucket.sign_url('GET', object_name, 3600)
+            
+            self.logger.info(f"文件上传成功，签名URL: {download_url}")
+            
+            # 还原代理设置
+            if original_http_proxy:
+                os.environ['http_proxy'] = original_http_proxy
+            if original_https_proxy:
+                os.environ['https_proxy'] = original_https_proxy
+                
+            return download_url
+            
         except Exception as e:
-            self.logger.error(f"加载Whisper模型失败: {str(e)}")
-            raise RuntimeError(f"加载Whisper模型失败: {str(e)}")
+            self.logger.exception(f"上传文件到OSS时出错: {str(e)}")
+            # 确保即使出错也还原代理设置
+            if 'original_http_proxy' in locals() and original_http_proxy:
+                os.environ['http_proxy'] = original_http_proxy
+            if 'original_https_proxy' in locals() and original_https_proxy:
+                os.environ['https_proxy'] = original_https_proxy
+            return None
+    
+    def _get_dashscope_transcription(self, file_url):
+        """
+        使用DashScope API转录音频
+        
+        Args:
+            file_url: OSS文件URL
+            
+        Returns:
+            dict: 转录结果
+        """
+        try:
+            import dashscope
+            
+            # 设置API密钥
+            dashscope.api_key = self.api_key
+            
+            # 提交异步转录任务
+            self.logger.info("提交DashScope转录任务")
+            task_response = dashscope.audio.asr.Transcription.async_call(
+                model=self.model,
+                file_urls=[file_url]
+            )
+            
+            # 检查任务提交状态
+            if not task_response.status_code == 200:
+                error_msg = f"提交任务失败: {task_response.code}, {task_response.message}"
+                self.logger.error(error_msg)
+                return None
+            
+            # 等待任务完成
+            task_id = task_response.output.task_id
+            self.logger.info(f"任务提交成功，任务ID: {task_id}，等待转录结果...")
+            
+            # 等待转录完成
+            transcribe_response = dashscope.audio.asr.Transcription.wait(task=task_id)
+            
+            # 检查转录状态
+            if transcribe_response.status_code != 200 or transcribe_response.output.get('task_status') != 'SUCCEEDED':
+                error_msg = f"转录失败: {transcribe_response.output.get('task_status', 'UNKNOWN')}"
+                self.logger.error(error_msg)
+                return None
+            
+            # 获取转录结果URL
+            results = transcribe_response.output.get('results', [])
+            if not results or 'transcription_url' not in results[0]:
+                self.logger.error("未找到转录结果URL")
+                return None
+            
+            transcription_url = results[0]['transcription_url']
+            
+            # 下载转录结果
+            self.logger.info(f"下载转录结果: {transcription_url}")
+            response = requests.get(transcription_url)
+            
+            if response.status_code != 200:
+                self.logger.error(f"下载转录结果失败: {response.status_code}")
+                return None
+            
+            # 解析JSON结果
+            try:
+                return response.json()
+            except json.JSONDecodeError:
+                self.logger.error("无法解析转录结果JSON")
+                return None
+                
+        except Exception as e:
+            self.logger.exception(f"使用DashScope转录时出错: {str(e)}")
+            return None
+    
+    def _parse_dashscope_result(self, result):
+        """
+        解析DashScope转录结果
+        
+        Args:
+            result: DashScope转录结果JSON
+            
+        Returns:
+            TranscriptionResult: 转录结果对象
+        """
+        if not result or 'transcripts' not in result:
+            return TranscriptionResult("", 0.0, {"error": "无效的转录结果"})
+        
+        try:
+            # 获取主要转录文本
+            transcript = result['transcripts'][0] if result['transcripts'] else None
+            
+            if not transcript:
+                return TranscriptionResult("", 0.0, {"error": "无转录信息"})
+            
+            # 获取完整文本
+            text = transcript.get('text', '')
+            
+            # 基于词级别分割句子
+            segments = []
+            all_words = []
+            
+            # 获取所有词级别信息
+            for sentence in transcript.get('sentences', []):
+                words = sentence.get('words', [])
+                all_words.extend(words)
+            
+            if not all_words:
+                # 如果没有词级别信息，退回到使用句子级别信息
+                for sentence in transcript.get('sentences', []):
+                    begin_time_sec = sentence.get('begin_time', 0) / 1000  # 转换为秒
+                    end_time_sec = sentence.get('end_time', 0) / 1000  # 转换为秒
+                    sentence_text = sentence.get('text', '')
+                    
+                    segments.append({
+                        "start": begin_time_sec,
+                        "end": end_time_sec,
+                        "text": sentence_text
+                    })
+            else:
+                # 基于标点符号分句
+                current_sentence = []
+                sentence_start_time = all_words[0]['begin_time'] / 1000 if all_words else 0
+                
+                for word in all_words:
+                    word_text = word.get('text', '')
+                    word_punctuation = word.get('punctuation', '')
+                    word_begin_time = word.get('begin_time', 0) / 1000  # 转换为秒
+                    word_end_time = word.get('end_time', 0) / 1000  # 转换为秒
+                    
+                    current_sentence.append(word)
+                    
+                    # 如果是句末标点(。!?等)或者较长的停顿，认为是句子结束
+                    if word_punctuation in ['。', '！', '，', '？', '.', '!', '?'] or \
+                       (len(current_sentence) > 1 and word_end_time - word_begin_time > 0.8):
+                        
+                        # 构建句子文本
+                        sentence_text = ''.join([w.get('text', '') + w.get('punctuation', '') for w in current_sentence])
+                        sentence_end_time = word_end_time
+                        
+                        # 添加到分段
+                        segments.append({
+                            "start": sentence_start_time,
+                            "end": sentence_end_time,
+                            "text": sentence_text
+                        })
+                        
+                        # 重置当前句子
+                        current_sentence = []
+                        if word is not all_words[-1]:  # 如果不是最后一个词
+                            sentence_start_time = all_words[all_words.index(word) + 1].get('begin_time', 0) / 1000
+                
+                # 处理最后一个可能未结束的句子
+                if current_sentence:
+                    sentence_text = ''.join([w.get('text', '') + w.get('punctuation', '') for w in current_sentence])
+                    sentence_end_time = current_sentence[-1].get('end_time', 0) / 1000
+                    
+                    segments.append({
+                        "start": sentence_start_time,
+                        "end": sentence_end_time,
+                        "text": sentence_text
+                    })
+            
+            self.logger.info(f"转录完成: 共{len(segments)}个段落")
+            
+            # 计算粗略的置信度（这里只是一个示例，实际上DashScope没有返回明确的置信度）
+            confidence = 0.95
+            
+            return TranscriptionResult(
+                text=text,
+                confidence=confidence,
+                metadata={
+                    "segments": segments,
+                    "language": "auto",  # DashScope会自动检测语言
+                    "words": all_words
+                }
+            )
+            
+        except Exception as e:
+            self.logger.exception(f"解析转录结果时出错: {str(e)}")
+            return TranscriptionResult("", 0.0, {"error": str(e)})
     
     def transcribe(self, audio_path):
         """
-        使用Whisper模型转录音频
+        使用DashScope转录音频
         
         Args:
             audio_path: 音频文件路径
@@ -120,60 +373,52 @@ class WhisperTranscriber(BaseTranscriber):
         if not os.path.exists(audio_path):
             self.logger.error(f"音频文件不存在: {audio_path}")
             return TranscriptionResult("", 0.0, {"error": "文件不存在"})
-            
-        self.load_model()
         
         try:
-            # 转录选项
-            options = {}
-            if self.language:
-                options["language"] = self.language
-                
-            # 执行转录
-            self.logger.info(f"开始转录: {Path(audio_path).name}")
-            result = self.model.transcribe(audio_path, **options)
+            # 1. 上传文件到OSS
+            file_url = self._upload_to_oss(audio_path)
+            if not file_url:
+                return TranscriptionResult("", 0.0, {"error": "上传文件到OSS失败"})
             
-            # 提取结果
-            text = result.get("text", "").strip()
-            segments = result.get("segments", [])
+            # 2. 使用DashScope转录
+            result = self._get_dashscope_transcription(file_url)
+            if not result:
+                return TranscriptionResult("", 0.0, {"error": "DashScope转录失败"})
             
-            # 计算简单的置信度指标（平均分数）
-            confidence = 0.0
-            if segments:
-                avg_confidence = sum(seg.get("confidence", 0) for seg in segments) / len(segments)
-                confidence = avg_confidence
-                
-            self.logger.info(f"转录完成: {Path(audio_path).name}")
-            
-            return TranscriptionResult(
-                text=text,
-                confidence=confidence,
-                metadata={
-                    "segments": segments,
-                    "language": result.get("language", "unknown")
-                }
-            )
+            # 3. 解析结果
+            return self._parse_dashscope_result(result)
             
         except Exception as e:
             self.logger.exception(f"转录文件 {audio_path} 时出错: {str(e)}")
             return TranscriptionResult("", 0.0, {"error": str(e)})
 
+
 class TranscriberFactory:
-    """转录器工厂类，用于创建不同类型的转录器"""
+    """转录器工厂类"""
     
-    @staticmethod
-    def create(transcriber_type="whisper", **kwargs):
+    @classmethod
+    def create(cls, transcriber_type, **kwargs):
         """
-        创建指定类型的转录器
+        创建转录器实例
         
         Args:
-            transcriber_type: 转录器类型，目前支持 "whisper"
-            **kwargs: 传递给转录器的参数
+            transcriber_type: 转录器类型名称
+            **kwargs: 传递给转录器构造函数的参数
             
         Returns:
             BaseTranscriber: 转录器实例
         """
-        if transcriber_type.lower() == "whisper":
-            return WhisperTranscriber(**kwargs)
+        logger = logging.getLogger(__name__)
+        
+        # 通过类型名称创建转录器
+        if transcriber_type == "dashscope":
+            return DashScopeTranscriber(**kwargs)
+        # elif transcriber_type == "aliyun_nls":
+        #     return AliyunNlsTranscriber(**kwargs)
+        # 不再支持Whisper转录器
+        # elif transcriber_type == "whisper":
+        #     return WhisperTranscriber(**kwargs)
         else:
-            raise ValueError(f"不支持的转录器类型: {transcriber_type}") 
+            # 默认使用DashScope转录器
+            logger.warning(f"未知的转录器类型 '{transcriber_type}'，使用默认的DashScope转录器")
+            return DashScopeTranscriber(**kwargs)
