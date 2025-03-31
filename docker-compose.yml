@@ -9,9 +9,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
+      # - ./frontend:/app
+      # - /app/node_modules
+      # - /app/.next
     environment:
       # 从.env读取FLASK_ENV，默认为"docker"，并据此设置API URL
       - NEXT_PUBLIC_API_URL=${API_URL:-http://api:5002/api}

@@ -10,7 +10,7 @@ from src.audio_processor_adapter import AudioProcessorAdapter  # 导入适配器
 from src.ai_analyzer_adapter import AIAnalyzerAdapter  # 导入适配器
 from src.temp import TempFileManager, get_global_manager, cleanup_global_manager  # 导入临时文件管理
 # import torch  # 不再需要torch导入
-from environment_manager import EnvironmentManager
+from src.environment_manager import EnvironmentManager
 from logging_config import LoggingConfig
 
 # 初始化日志系统

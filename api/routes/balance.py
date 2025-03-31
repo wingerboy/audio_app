@@ -259,7 +259,7 @@ def check_analyze_balance():
             
         # 如果提供了task_id，从task中获取信息
         if task_id:
-            from app import tasks
+            from api.app import tasks
             if task_id not in tasks:
                 return jsonify({"error": "任务不存在"}), 404
                 
