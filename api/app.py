@@ -7,7 +7,7 @@ import uuid
 import json
 import time
 import traceback
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 import logging
 from werkzeug.utils import secure_filename
@@ -16,6 +16,10 @@ from flask_jwt_extended import JWTManager
 from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from dotenv import load_dotenv
 from api.auth import setup_jwt, login_required, admin_required, get_current_user
+from typing import Optional, Dict
+from src.utils.logging_config import LoggingConfig, RequestContext
+from api.decorators import balance_check_required  # 导入余额检查装饰器
+from functools import wraps
 
 # 添加项目根目录到 Python 路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,9 +30,7 @@ sys.path.insert(0, project_root)
 load_dotenv()
 
 # 设置日志
-logging.basicConfig(level=logging.INFO,
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = LoggingConfig.setup_logging(log_level=logging.INFO)
 
 # 创建 Flask 应用
 app = Flask(__name__)
@@ -44,7 +46,7 @@ jwt = JWTManager(app)
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 app.config['UPLOAD_FOLDER'] = os.path.join(project_root, 'data', 'uploads')
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 最大500MB
+app.config['MAX_CONTENT_LENGTH'] = 1000 * 1024 * 1024  # 最大500MB
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 60 * 60 * 24 * 7  # 7天
 
 # 确保上传目录存在
@@ -89,8 +91,56 @@ COMPONENTS_READY = {
     # "gpu": env_manager.check_gpu_status()[0]  # 不再需要检测GPU
 }
 
-# 用于跟踪任务状态的字典
-tasks = {}
+# 任务管理器类
+class TaskManager:
+    def __init__(self):
+        self._tasks = {}
+        self.logger = LoggingConfig.get_logger(__name__ + '.TaskManager')
+    
+    def get_task(self, task_id: str) -> Optional[Dict]:
+        task = self._tasks.get(task_id)
+        if task:
+            # 设置上下文
+            user_id = task.get("user_id")
+            RequestContext.set_context(user_id=user_id, task_id=task_id, operation="get_task")
+        return task
+    
+    def set_task(self, task_id: str, task_data: Dict):
+        # 记录任务创建/更新
+        is_new = task_id not in self._tasks
+        self._tasks[task_id] = task_data
+        
+        # 设置上下文
+        user_id = task_data.get("user_id")
+        RequestContext.set_context(user_id=user_id, task_id=task_id, operation="set_task")
+        
+        if is_new:
+            self.logger.info(f"创建新任务: {task_id}, 文件: {task_data.get('filename', 'unknown')}")
+        else:
+            self.logger.info(f"更新任务: {task_id}, 状态: {task_data.get('status', 'unknown')}")
+    
+    def delete_task(self, task_id: str):
+        if task_id in self._tasks:
+            # 设置上下文
+            task = self._tasks[task_id]
+            user_id = task.get("user_id")
+            RequestContext.set_context(user_id=user_id, task_id=task_id, operation="delete_task")
+            
+            self.logger.info(f"删除任务: {task_id}")
+            del self._tasks[task_id]
+    
+    def get_all_tasks(self) -> Dict[str, Dict]:
+        return self._tasks
+    
+    def get_user_tasks(self, user_id: str) -> Dict[str, Dict]:
+        """获取指定用户的所有任务"""
+        return {
+            task_id: task for task_id, task in self._tasks.items() 
+            if task.get("user_id") == user_id
+        }
+
+# 创建全局任务管理器实例
+task_manager = TaskManager()
 
 # 添加全局错误处理装饰器
 @app.errorhandler(Exception)
@@ -114,10 +164,16 @@ def handle_exception(e):
 def get_progress_callback(task_id):
     """创建进度回调函数"""
     def update_progress(message, percent):
-        tasks[task_id]["status"] = "processing"
-        tasks[task_id]["progress"] = percent
-        tasks[task_id]["message"] = message
-        logger.info(f"Task {task_id}: {message} ({percent}%)")
+        # 设置任务上下文（确保在不同线程中也能正确记录）
+        task = task_manager.get_task(task_id)
+        if task:
+            user_id = task.get("user_id")
+            RequestContext.set_context(user_id=user_id, task_id=task_id, operation="progress_update")
+            
+            task["status"] = "processing"
+            task["progress"] = percent
+            task["message"] = message
+            logger.info(f"任务进度更新: {message} ({percent}%)")
     return update_progress
 
 # 导入音频处理相关的类
@@ -427,27 +483,22 @@ def upload_file():
     
     user_id = user['id']
     username = user['username']
-    
-    # 生成唯一任务ID
-    task_id = str(uuid.uuid4())
 
+    # 确保引入subprocess模块
+    import subprocess
+    
     def get_audio_duration(file_path):
         """使用ffprobe获取音频/视频文件时长(秒)"""
-        cmd = [
-            "ffprobe", 
-            "-v", "error", 
-            "-show_entries", "format=duration", 
-            "-of", "default=noprint_wrappers=1:nokey=1", 
-            file_path
-        ]
-        try:
-            output = subprocess.check_output(cmd).decode("utf-8").strip()
-            return float(output)
-        except Exception as e:
-            logger.warning(f"无法获取文件时长: {str(e)}, 使用基于文件大小的估算")
-            # 如果获取失败，根据文件大小估算
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            return file_size_mb * 2  # 假设每MB约2秒音频 
+        # 使用AudioUtils类提供的方法，它对WAV文件和其他格式有不同处理
+        from src.audio.utils import AudioUtils
+        duration = AudioUtils.get_audio_duration(file_path)
+        if duration > 0:
+            return duration
+        
+        logger.warning(f"无法获取文件时长，使用基于文件大小的估算")
+        # 如果获取失败，根据文件大小估算
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        return file_size_mb * 2  # 假设每MB约2秒音频
     
     # 保存文件到临时目录
     filename, file_extension = os.path.splitext(secure_filename(file.filename))
@@ -456,82 +507,192 @@ def upload_file():
     
     # 记录任务信息
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    audio_duration_seconds = get_audio_duration(file_path)
-    tasks[task_id] = {
+    
+    # 生成唯一任务ID
+    task_id = str(uuid.uuid4())
+    
+    # 创建任务目录
+    task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    
+    # 在上传阶段就提取音频文件
+    audio_path = None
+    audio_duration_seconds = 0
+    try:
+        # 根据文件类型处理
+        if file_extension.lower() in ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac']:
+            # 如果已经是音频文件，直接使用
+            audio_path = file_path
+            logger.info(f"上传的文件已经是音频: {file.filename}")
+        else:
+            # 如果是视频或其他格式，提取音频
+            logger.info(f"从上传的文件中提取音频: {file.filename}")
+            audio_processor = AudioProcessorAdapter()
+            audio_path = audio_processor.extract_audio(file_path)
+            if not audio_path:
+                logger.warning(f"无法从文件中提取音频: {file.filename}")
+        
+        # 如果成功提取了音频，保存到持久化目录
+        if audio_path:
+            # 复制提取的音频文件到持久化目录
+            filename, ext = os.path.splitext(os.path.basename(audio_path))
+            persistent_audio_path = os.path.join(task_dir, f"{filename}{ext}")
+            try:
+                logger.info(f"复制音频文件到持久化路径: {audio_path} -> {persistent_audio_path}")
+                shutil.copy2(audio_path, persistent_audio_path)
+                # 更新音频路径为持久化路径
+                audio_path = persistent_audio_path
+            except Exception as e:
+                logger.warning(f"复制音频文件失败: {str(e)}，将继续使用临时路径")
+    except Exception as e:
+        logger.warning(f"音频提取过程中出错: {str(e)}")
+    
+    # 获取音频时长
+    if audio_path and os.path.exists(audio_path):
+        audio_duration_seconds = get_audio_duration(audio_path)
+    else:
+        # 如果提取失败，尝试直接从原始文件获取时长
+        audio_duration_seconds = get_audio_duration(file_path)
+    
+    # 计算预估费用 - 不同操作可能有不同费用
+    audio_duration_minutes = audio_duration_seconds / 60
+    estimated_cost = 0
+    try:
+        from src.balance_system.services.pricing_service import PricingService
+        
+        analyze_cost = PricingService.estimate_cost(
+            file_size_mb=file_size_mb, 
+            audio_duration_minutes=audio_duration_minutes
+        )
+        estimated_cost = analyze_cost["estimated_cost"]
+        
+        logger.info(f"已计算预估费用: {estimated_cost}")
+    except Exception as e:
+        logger.warning(f"计算预估费用失败: {str(e)}")
+    
+    # 记录任务信息
+    task_info = {
         "id": task_id,
         "filename": file.filename,
         "path": file_path,
         "original_file": file_path,  # 保存原始文件路径
+        "audio_path": audio_path,    # 保存提取的音频路径
         "size_mb": file_size_mb,
         "audio_duration_seconds": audio_duration_seconds,  # 添加音频时长信息
-        "audio_duration_minutes": audio_duration_seconds / 60,  # 添加音频时长（分钟）
+        "audio_duration_minutes": audio_duration_minutes,  # 添加音频时长（分钟）
         "status": "uploaded",
         "progress": 0,
         "message": "文件已上传",
         "created_at": time.time(),
-        "user_id": user_id  # 记录用户ID
+        "user_id": user_id,  # 记录用户ID
+        "estimated_cost": estimated_cost  # 记录预估费用
     }
+    
+    # 保存任务信息
+    task_manager.set_task(task_id, task_info)
     
     logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB, {audio_duration_seconds:.2f} 秒), 任务ID: {task_id}, 用户: {username}")
     
+    # 返回响应，包含预估费用
     return jsonify({
         "task_id": task_id,
         "filename": file.filename,
         "size_mb": file_size_mb,
-        "audio_duration_seconds": audio_duration_seconds,  # 在响应中返回音频时长
-        "audio_duration_minutes": audio_duration_seconds / 60  # 在响应中返回音频时长（分钟）
+        "audio_duration_seconds": audio_duration_seconds,
+        "audio_duration_minutes": audio_duration_minutes,
+        "estimated_cost": estimated_cost  # 在响应中包含预估费用
     })
 
 @app.route('/api/analyze', methods=['POST'])
+@login_required
 def analyze_audio():
     """分析音频内容"""
     data = request.json
     task_id = data.get('task_id')
-    # model_size = data.get('model_size', 'base')  # 不再需要model_size参数
+    model_size = data.get('model_size', 'base')  # 默认使用base模型
     
-    if not task_id or task_id not in tasks:
+    if not task_id or task_id not in task_manager.get_all_tasks():
         return jsonify({"error": "无效的任务ID"}), 400
+
+    # 手动执行余额检查
+    from src.balance_system.services.user_service import UserService
     
-    task = tasks[task_id]
+    # 获取用户余额
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "未找到用户信息"}), 404
+    
+    user_id = user['id']
+    user_service = UserService()
+    user = user_service.get_user_by_id(user_id)
+    
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+        
+    current_balance = float(user.balance)    
+    task = task_manager.get_task(task_id)
+    estimated_cost = task.get('estimated_cost', 0)
+    
+    # 检查余额是否足够
+    if current_balance < estimated_cost:
+        error_msg = f"余额不足，当前余额 {current_balance} 点，需要 {estimated_cost} 点"
+        logger.warning(f"用户 {user_id} {error_msg}")
+        return jsonify({
+            "error": "余额不足",
+            "current_balance": current_balance,
+            "estimated_cost": estimated_cost
+        }), 402
     file_path = task["path"]
+    
+    # 设置任务上下文
+    user_id = task.get("user_id")
+    RequestContext.set_context(user_id=user_id, task_id=task_id, operation="analyze_audio")
+    logger.info(f"开始分析音频任务: {task_id}, 文件: {os.path.basename(file_path)}")
     
     # 更新任务状态
     task["status"] = "processing"
     task["progress"] = 0
     task["message"] = "开始处理..."
+    task["model_size"] = model_size  # 记录使用的模型大小
     
     try:
         # 创建进度回调
         progress_callback = get_progress_callback(task_id)
         
-        # 提取音频
-        progress_callback("提取音频中...", 5)
-        audio_processor = AudioProcessorAdapter()
-        audio_path = audio_processor.extract_audio(file_path, progress_callback=progress_callback)
-        
-        if not audio_path:
-            task["status"] = "failed"
-            task["message"] = "音频提取失败"
-            return jsonify({"error": "音频提取失败"}), 500
-        
-        # 创建任务专用的持久化目录
-        task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
-        os.makedirs(task_dir, exist_ok=True)
-        
-        # 复制提取的音频文件到持久化目录
-        filename, ext = os.path.splitext(os.path.basename(audio_path))
-        persistent_audio_path = os.path.join(task_dir, f"{filename}{ext}")
-        try:
-            logger.info(f"复制音频文件到持久化路径: {audio_path} -> {persistent_audio_path}")
-            shutil.copy2(audio_path, persistent_audio_path)
-            # 更新音频路径为持久化路径
-            audio_path = persistent_audio_path
-        except Exception as e:
-            logger.warning(f"复制音频文件失败: {str(e)}，将继续使用临时路径")
+        # 检查是否已经在上传阶段提取了音频
+        audio_path = task.get("audio_path")
+        if not audio_path or not os.path.exists(audio_path):
+            # 只有在上传阶段没有提取音频时才提取
+            progress_callback("提取音频中...", 5)
+            audio_processor = AudioProcessorAdapter()
+            audio_path = audio_processor.extract_audio(file_path, progress_callback=progress_callback)
+            
+            if not audio_path:
+                task["status"] = "failed"
+                task["message"] = "音频提取失败"
+                return jsonify({"error": "音频提取失败"}), 500
+            
+            # 创建任务专用的持久化目录
+            task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
+            os.makedirs(task_dir, exist_ok=True)
+            
+            # 复制提取的音频文件到持久化目录
+            filename, ext = os.path.splitext(os.path.basename(audio_path))
+            persistent_audio_path = os.path.join(task_dir, f"{filename}{ext}")
+            try:
+                logger.info(f"复制音频文件到持久化路径: {audio_path} -> {persistent_audio_path}")
+                shutil.copy2(audio_path, persistent_audio_path)
+                # 更新音频路径为持久化路径
+                audio_path = persistent_audio_path
+            except Exception as e:
+                logger.warning(f"复制音频文件失败: {str(e)}，将继续使用临时路径")
+        else:
+            progress_callback("使用已提取的音频...", 15)
+            logger.info(f"使用上传时已提取的音频: {audio_path}")
         
         # 分析音频
         progress_callback(f"使用云API分析音频内容...", 20)  # 修改提示信息
-        audio_analyzer = AIAnalyzerAdapter()  # 不再需要model_size参数
+        audio_analyzer = AIAnalyzerAdapter()
         transcription = audio_analyzer.transcribe_audio(
             audio_path, 
             progress_callback=progress_callback
@@ -566,6 +727,7 @@ def analyze_audio():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/split', methods=['POST'])
+@login_required
 def split_audio():
     """分割音频"""
     data = request.json
@@ -574,14 +736,21 @@ def split_audio():
     output_format = data.get('output_format', 'mp3')
     output_quality = data.get('output_quality', 'medium')
     
-    if not task_id or task_id not in tasks:
+    if not task_id or task_id not in task_manager.get_all_tasks():
         return jsonify({"error": "无效的任务ID"}), 400
     
-    task = tasks[task_id]
+    task = task_manager.get_task(task_id)
     if "audio_path" not in task:
         return jsonify({"error": "尚未完成音频分析"}), 400
     
     audio_path = task["audio_path"]
+    
+    # 设置任务上下文
+    user_id = task.get("user_id")
+    RequestContext.set_context(user_id=user_id, task_id=task_id, operation="split_audio")
+    logger.info(f"开始分割音频任务: {task_id}, 分段数: {len(segments)}")
+    
+    # 余额检查已由装饰器处理
     
     # 更新任务状态
     task["status"] = "splitting"
@@ -713,10 +882,9 @@ def split_audio():
 @app.route('/api/tasks/<task_id>', methods=['GET'])
 def get_task(task_id):
     """获取任务状态"""
-    if task_id not in tasks:
+    task = task_manager.get_task(task_id)
+    if not task:
         return jsonify({"error": "任务不存在"}), 404
-    
-    task = tasks[task_id]
     
     # 清理敏感或过大的字段
     task_info = {k: v for k, v in task.items() if k not in ["path", "audio_path", "transcription"]}
@@ -730,10 +898,9 @@ def get_task(task_id):
 @app.route('/api/download/<task_id>/<int:file_index>', methods=['GET'])
 def download_file(task_id, file_index):
     """下载分割后的文件"""
-    if task_id not in tasks:
+    task = task_manager.get_task(task_id)
+    if not task:
         return jsonify({"error": "任务不存在"}), 404
-    
-    task = tasks[task_id]
     
     if "output_files" not in task or not task["output_files"]:
         return jsonify({"error": "没有可下载的文件"}), 404
@@ -747,10 +914,9 @@ def download_file(task_id, file_index):
 @app.route('/api/cleanup/<task_id>', methods=['DELETE'])
 def cleanup_task(task_id):
     """清理任务资源"""
-    if task_id not in tasks:
+    task = task_manager.get_task(task_id)
+    if not task:
         return jsonify({"error": "任务不存在"}), 404
-    
-    task = tasks[task_id]
     
     try:
         # 清理文件
@@ -765,7 +931,7 @@ def cleanup_task(task_id):
             shutil.rmtree(task["output_dir"])
         
         # 从任务列表中移除
-        del tasks[task_id]
+        task_manager.delete_task(task_id)
         
         return jsonify({"status": "success", "message": "任务已清理"})
     
@@ -813,6 +979,68 @@ def get_user_info():
         'status': 'success',
         'data': user
     })
+
+# 添加请求前钩子，自动设置日志上下文
+@app.before_request
+def setup_request_context():
+    """在每个请求开始时设置日志上下文"""
+    # 清除上一个请求的上下文
+    RequestContext.clear_context()
+    
+    # 设置请求ID
+    request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())
+    g.request_id = request_id
+    
+    # 尝试从JWT获取用户ID
+    user_id = None
+    try:
+        user_id = get_jwt_identity()
+    except Exception:
+        # 未认证的请求
+        pass
+    
+    # 尝试从URL获取任务ID
+    task_id = None
+    # 从请求参数中获取任务ID
+    if request.method == 'GET':
+        task_id = request.args.get('task_id')
+    elif request.is_json and request.get_json():
+        task_id = request.json.get('task_id')
+    
+    # 设置上下文
+    context = {
+        'request_id': request_id,
+        'remote_addr': request.remote_addr,
+        'method': request.method,
+        'path': request.path
+    }
+    
+    if user_id:
+        context['user_id'] = user_id
+    if task_id:
+        context['task_id'] = task_id
+    
+    RequestContext.set_context(**context)
+    
+    # 记录请求开始日志
+    logger.info(f"请求开始: {request.method} {request.path}")
+
+# 添加请求后钩子，记录请求处理时间
+@app.after_request
+def log_request_info(response):
+    """在每个请求结束后记录处理信息"""
+    # 计算请求处理时间
+    if hasattr(g, 'request_start_time'):
+        elapsed = time.time() - g.request_start_time
+        logger.info(f"请求结束: {response.status_code} - 耗时 {elapsed:.4f}s")
+    
+    return response
+
+# 记录每个请求的开始时间
+@app.before_request
+def start_timer():
+    """记录请求开始时间"""
+    g.request_start_time = time.time()
 
 if __name__ == '__main__':
     # 启动API服务

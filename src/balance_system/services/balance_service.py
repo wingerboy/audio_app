@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from ..db import db_session
 from ..models.user import User
 from ..models.transaction_record import TransactionRecord, TransactionType
+from ..models.user_balance import UserBalance
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,21 @@ class BalanceService:
             
             # 更新用户余额
             user.balance += decimal_points
+            user.total_charged += decimal_points
+            
+            # 确保用户有对应的UserBalance记录
+            balance_record = db_session.query(UserBalance).filter(UserBalance.user_id == user_id).first()
+            if not balance_record:
+                balance_record = UserBalance(
+                    user_id=user_id,
+                    balance=decimal_points,
+                    total_charged=decimal_points,
+                    total_consumed=Decimal('0')
+                )
+                db_session.add(balance_record)
+            else:
+                balance_record.balance += decimal_points
+                balance_record.total_charged += decimal_points
             
             # 创建交易记录
             transaction = TransactionRecord(
@@ -41,7 +57,7 @@ class BalanceService:
                 amount=decimal_points,
                 balance=user.balance,  # 使用更新后的余额
                 transaction_type=TransactionType.REGISTER,
-                description="新用户注册赠送点数",
+                description="New user registration bonus points",
                 expires_at=expires_at
             )
             
@@ -49,6 +65,8 @@ class BalanceService:
             db_session.commit()
             db_session.refresh(transaction)
             db_session.refresh(user)  # 刷新用户对象
+            if balance_record in db_session:
+                db_session.refresh(balance_record)  # 刷新余额记录
             
             return transaction.to_dict()
         except SQLAlchemyError as e:
@@ -234,7 +252,7 @@ class BalanceService:
                         amount=-Decimal(str(deduct_points)),
                         balance=user.balance,
                         transaction_type=TransactionType.CONSUME,
-                        description=f"点数过期（{len(expired_transactions)}条记录）"
+                        description=f"Points expired {len(expired_transactions)} records）"
                     )
                     
                     db_session.add(transaction)

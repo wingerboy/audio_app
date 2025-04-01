@@ -8,7 +8,7 @@ import time
 import wave
 import contextlib
 from pathlib import Path
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 
 class AudioUtils:
     """音频处理常用工具函数集"""

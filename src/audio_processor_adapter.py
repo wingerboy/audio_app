@@ -6,7 +6,7 @@ import tempfile
 import shutil
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 
 # 导入新的音频处理组件
 from .audio import AudioConverter, AudioSplitter, SplitOptions, SegmentOptions, AudioUtils

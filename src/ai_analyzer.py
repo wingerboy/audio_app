@@ -9,7 +9,7 @@ import logging
 import numpy as np
 from pathlib import Path
 # import torch  # 注释掉torch导入
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 
 # 获取logger
 logger = LoggingConfig.get_logger(__name__)

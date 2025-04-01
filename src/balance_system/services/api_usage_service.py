@@ -40,7 +40,7 @@ class ApiUsageService:
             consume_result = BalanceService.consume_user_balance(
                 user_id=user_id,
                 amount=cost,
-                description=f"使用{api_type}服务" + (f" ({model_size})" if model_size else "")
+                description=f"use {api_type} service" + (f" ({model_size})" if model_size else "")
             )
         except ValueError as e:
             logger.error(f"扣除余额失败: {e}")

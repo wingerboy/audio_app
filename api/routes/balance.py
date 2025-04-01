@@ -9,12 +9,67 @@ from src.balance_system.services.user_service import UserService
 import os
 import uuid
 import subprocess
+from src.balance_system.models.user import User
+from src.balance_system.db import db_session
+from src.utils.logging_config import LoggingConfig
 
-# 初始化日志
-logger = logging.getLogger(__name__)
+# 设置日志
+logger = LoggingConfig.setup_logging(log_level=logging.INFO)
 
 # 创建蓝图
 bp = Blueprint('balance_bp', __name__, url_prefix='/api/balance')
+
+# 将原路由转换为工具函数
+def check_analyze_balance_for_task(task_id, user_id, model_size='base'):
+    """检查当前余额是否足够进行音频分析（工具函数）
+    
+    Args:
+        task_id: 任务ID
+        user_id: 用户ID
+        model_size: 模型大小，默认为'base'
+        
+    Returns:
+        tuple: (is_sufficient, current_balance, estimated_cost, details)
+    """
+    try:
+        # 在函数内部导入task_manager以避免循环导入
+        from api.app import task_manager
+        
+        # 获取任务信息
+        task_info = task_manager.get_task(task_id)
+        if not task_info:
+            raise ValueError(f'找不到任务: {task_id}')
+        
+        # 获取参数
+        file_size_mb = task_info.get('size_mb')
+        audio_duration_minutes = task_info.get('audio_duration_minutes')
+        
+        # 获取用户余额
+        user_service = UserService()
+        user = user_service.get_user_by_id(user_id)
+        
+        if not user:
+            raise ValueError("用户不存在")
+            
+        current_balance = user.balance
+        
+        # 使用传入的model_size或任务中的model_size，或默认为base
+        model_size = model_size or task_info.get('model_size', 'base')
+        
+        # 估算费用
+        cost_info = PricingService.estimate_cost(
+            file_size_mb=file_size_mb, 
+            audio_duration_minutes=audio_duration_minutes
+        )
+        
+        estimated_cost = cost_info["estimated_cost"]
+        is_sufficient = current_balance >= estimated_cost
+        
+        return (is_sufficient, float(current_balance), float(estimated_cost), cost_info["details"])
+        
+    except Exception as e:
+        logger.exception(f"检查余额失败: {str(e)}")
+        raise
 
 @bp.route('/info', methods=['GET'])
 @login_required
@@ -202,7 +257,7 @@ def admin_charge_balance():
         # 提取参数
         user_id = data.get('user_id')
         amount = float(data.get('amount'))
-        description = data.get('description', '管理员充值')
+        description = data.get('description', 'Administrator recharge')
         
         # 验证金额
         if amount <= 0:
@@ -238,66 +293,187 @@ def admin_charge_balance():
             'message': f'充值失败: {str(e)}'
         }), 500
 
+# 保留原路由但调用工具函数
 @bp.route('/check_analyze', methods=['POST'])
 @login_required
 def check_analyze_balance():
-    """检查当前余额是否足够进行音频分析"""
+    """检查当前余额是否足够进行音频分析（API接口）"""
     try:
         data = request.json
-        if not data:
-            return jsonify({"error": "缺少请求数据"}), 400
-            
-        # 获取参数
-        file_size_mb = data.get('file_size_mb')
-        model_size = data.get('model_size', 'base')
-        task_id = data.get('task_id')  # 添加task_id参数
-        audio_duration_minutes = data.get('audio_duration_minutes')
         
-        # 验证参数
-        if not file_size_mb and not task_id:
-            return jsonify({"error": "缺少必要参数file_size_mb或task_id"}), 400
-            
-        # 如果提供了task_id，从task中获取信息
-        if task_id:
-            from api.app import tasks
-            if task_id not in tasks:
-                return jsonify({"error": "任务不存在"}), 404
-                
-            task = tasks[task_id]
-            file_size_mb = task.get('size_mb')
-            audio_duration_minutes = task.get('audio_duration_minutes')
+        # 验证必要参数
+        if 'task_id' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少必要参数: task_id'
+            }), 400
         
-        # 获取当前用户ID
+        task_id = data['task_id']
         user_id = get_jwt_identity()
+        model_size = data.get('model_size', 'base')
         
-        # 获取用户余额
-        user_service = UserService()
-        user = user_service.get_user_by_id(user_id)
-        
-        if not user:
-            return jsonify({"error": "用户不存在"}), 404
+        try:
+            is_sufficient, current_balance, estimated_cost, details = check_analyze_balance_for_task(
+                task_id, user_id, model_size
+            )
             
-        current_balance = user.balance
-        
-        # 估算费用
-        cost_info = PricingService.estimate_cost(
-            file_size_mb=file_size_mb, 
-            model_size=model_size,
-            audio_duration_minutes=audio_duration_minutes
-        )
-        
-        estimated_cost = cost_info["estimated_cost"]
-        is_sufficient = current_balance >= estimated_cost
-        
-        return jsonify({
-            "is_sufficient": is_sufficient,
-            "current_balance": float(current_balance),
-            "estimated_cost": float(estimated_cost),
-            "details": cost_info["details"],
-            "task_id": task_id if task_id else None
-        })
+            return jsonify({
+                "is_sufficient": is_sufficient,
+                "current_balance": current_balance,
+                "estimated_cost": estimated_cost,
+                "details": details,
+                "task_id": task_id
+            })
+            
+        except ValueError as e:
+            return jsonify({
+                'status': 'error',
+                'message': str(e)
+            }), 404
         
     except Exception as e:
         logger.exception(f"检查余额失败: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/balance/check', methods=['POST'])
+@login_required
+def check_balance():
+    """检查用户余额"""
+    try:
+        # 获取当前用户
+        user = get_current_user()
+        if not user:
+            return jsonify({"error": "未找到用户信息"}), 404
+            
+        user_id = user['id']
+        
+        # 获取任务ID或文件大小
+        data = request.get_json()
+        task_id = data.get('task_id')
+        file_size_mb = data.get('file_size_mb')
+        audio_duration_minutes = data.get('audio_duration_minutes')
+        
+        # 如果提供了task_id，从任务中获取信息
+        if task_id:
+            # 在函数内部导入task_manager以避免循环导入
+            from api.app import task_manager
+            
+            task = task_manager.get_task(task_id)
+            if not task:
+                return jsonify({"error": "任务不存在"}), 404
+                
+            file_size_mb = task.get('size_mb')
+            audio_duration_minutes = task.get('audio_duration_minutes')
+        
+        # 如果仍然没有文件大小信息，返回错误
+        if not file_size_mb:
+            return jsonify({"error": "缺少文件大小信息"}), 400
+            
+        # 获取用户信息
+        db_user = db_session.query(User).filter(User.id == user_id).first()
+        if not db_user:
+            return jsonify({"error": "未找到用户信息"}), 404
+            
+        # 检查余额
+        balance_check = BalanceService.check_balance(
+            user_id=user_id,
+            file_size_mb=file_size_mb,
+            audio_duration_minutes=audio_duration_minutes
+        )
+        
+        return jsonify({
+            "status": "success",
+            "data": {
+                "balance": float(db_user.balance),
+                "required_balance": float(balance_check["required_balance"]),
+                "is_sufficient": balance_check["is_sufficient"],
+                "file_size_mb": file_size_mb,
+                "audio_duration_minutes": audio_duration_minutes,
+                "task_id": task_id if task_id else None
+            }
+        })
+        
+    except Exception as e:
+        logger.exception(f"检查余额时出错: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/balance/charge', methods=['POST'])
+@login_required
+def charge_balance():
+    """充值余额"""
+    try:
+        # 获取当前用户
+        user = get_current_user()
+        if not user:
+            return jsonify({"error": "未找到用户信息"}), 404
+            
+        user_id = user['id']
+        
+        # 获取充值金额
+        data = request.get_json()
+        amount = data.get('amount')
+        
+        if not amount or amount <= 0:
+            return jsonify({"error": "无效的充值金额"}), 400
+            
+        # 执行充值
+        result = BalanceService.charge_balance(user_id, amount)
+        
+        return jsonify({
+            "status": "success",
+            "data": {
+                "balance": float(result["balance"]),
+                "charged_amount": float(amount)
+            }
+        })
+        
+    except Exception as e:
+        logger.exception(f"充值余额时出错: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/balance/history', methods=['GET'])
+@login_required
+def get_balance_history():
+    """获取余额变动历史"""
+    try:
+        # 获取当前用户
+        user = get_current_user()
+        if not user:
+            return jsonify({"error": "未找到用户信息"}), 404
+            
+        user_id = user['id']
+        
+        # 获取分页参数
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        
+        # 获取历史记录
+        history = BalanceService.get_balance_history(
+            user_id=user_id,
+            page=page,
+            per_page=per_page
+        )
+        
+        return jsonify({
+            "status": "success",
+            "data": {
+                "total": history["total"],
+                "page": page,
+                "per_page": per_page,
+                "items": [
+                    {
+                        "id": record.id,
+                        "amount": float(record.amount),
+                        "type": record.type,
+                        "description": record.description,
+                        "created_at": record.created_at.isoformat()
+                    }
+                    for record in history["items"]
+                ]
+            }
+        })
+        
+    except Exception as e:
+        logger.exception(f"获取余额历史时出错: {str(e)}")
         return jsonify({"error": str(e)}), 500
 

@@ -5,7 +5,7 @@ import os
 import re
 # import torch  # 注释掉torch导入
 import logging
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 from pathlib import Path
 
 class Segment:

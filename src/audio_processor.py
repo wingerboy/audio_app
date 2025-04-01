@@ -7,7 +7,7 @@ import sys
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 
 class AudioProcessor:
     def __init__(self, use_disk_processing=True, chunk_size_mb=200, max_workers=2):

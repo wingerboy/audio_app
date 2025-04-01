@@ -58,6 +58,15 @@ export function AudioSplitter() {
       // 更新输出文件
       setOutputFiles(response.files);
       
+      // 如果响应中包含任务状态，则直接使用
+      if (response.task_status) {
+        useAppStore.getState().setCurrentTask(response.task_status);
+      } else {
+        // 否则手动获取最新的任务状态
+        const updatedTask = await apiService.getTaskStatus(currentTask.id);
+        useAppStore.getState().setCurrentTask(updatedTask);
+      }
+      
       // 转到下一步
       setTimeout(() => {
         setCurrentStep(4);

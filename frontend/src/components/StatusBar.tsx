@@ -56,6 +56,11 @@ export function StatusBar({ task }: StatusBarProps) {
           <div className={`w-3 h-3 rounded-full mr-2 ${currentStatus.color}`}></div>
           <span className="font-medium text-gray-800">{task.filename}</span>
           <span className="ml-2 text-sm text-gray-500">({task.size_mb.toFixed(2)} MB)</span>
+          {task.audio_duration_minutes && (
+            <span className="ml-2 text-sm text-gray-500">
+              ({Math.floor(task.audio_duration_minutes)}分{Math.floor((task.audio_duration_minutes % 1) * 60)}秒)
+            </span>
+          )}
         </div>
         
         <div className="flex items-center">

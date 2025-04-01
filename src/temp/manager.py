@@ -6,7 +6,7 @@ import tempfile
 import shutil
 import logging
 from pathlib import Path
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 
 class TempFileManager:
     """

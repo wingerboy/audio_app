@@ -17,4 +17,24 @@ GRANT ALL PRIVILEGES ON audio_app.* TO 'audio_app_user'@'%';
 GRANT ALL PRIVILEGES ON audio_app.* TO 'audio_app_user'@'localhost';
 
 -- 刷新权限
-FLUSH PRIVILEGES; 
+FLUSH PRIVILEGES;
+
+-- 切换到新创建的数据库
+USE audio_app;
+
+-- 设置连接字符集
+SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- 设置字符集
+SET NAMES utf8mb4;
+SET CHARACTER SET utf8mb4;
+SET character_set_client = utf8mb4;
+SET character_set_connection = utf8mb4;
+SET character_set_results = utf8mb4;
+
+-- 设置时区
+SET time_zone = '+08:00';
+
+-- 显示配置验证
+SHOW VARIABLES LIKE 'character%';
+SHOW VARIABLES LIKE '%time_zone%'; 

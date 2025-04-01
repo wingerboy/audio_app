@@ -6,7 +6,7 @@ import subprocess
 import logging
 import shutil
 from pathlib import Path
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 from ..temp.manager import TempFileManager
 
 class AudioConverter:

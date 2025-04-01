@@ -36,28 +36,20 @@ export function ModelSelector() {
       setIsAnalyzing(true);
       setError(null);
       
-      // 检查余额是否足够
-      try {
-        const balanceCheck = await apiService.checkBalance({
-          taskId: currentTask.id,
-          modelSize: 'base'  // 固定使用base模型
-        });
-        
-        if (!balanceCheck.is_sufficient) {
-          setError(`余额不足，当前余额 ${balanceCheck.current_balance.toFixed(0)} 点，需要 ${balanceCheck.estimated_cost.toFixed(0)} 点。请先充值。`);
-          setIsAnalyzing(false);
-          return;
-        }
-      } catch (error) {
-        console.error('检查余额失败:', error);
-        // 即使检查余额失败，我们依然尝试分析
-      }
-      
-      // 调用分析API - 不再需要传递model_size参数
+      // 直接调用分析API - 服务器端会检查余额
       const response = await apiService.analyzeAudio(currentTask.id);
       
       // 更新分段数据
       setSegments(response.segments);
+      
+      // 如果响应中包含任务状态，则直接使用
+      if (response.task_status) {
+        useAppStore.getState().setCurrentTask(response.task_status);
+      } else {
+        // 否则手动获取最新的任务状态
+        const updatedTask = await apiService.getTaskStatus(currentTask.id);
+        useAppStore.getState().setCurrentTask(updatedTask);
+      }
       
       // 转到下一步
       setTimeout(() => {
@@ -66,8 +58,14 @@ export function ModelSelector() {
       
     } catch (error: any) {
       console.error('分析失败:', error);
+      
+      // 检查是否为余额不足错误 (HTTP 402)
+      if (error.response && error.response.status === 402) {
+        const data = error.response.data;
+        setError(`余额不足，当前余额 ${data.current_balance.toFixed(0)} 点，需要 ${data.estimated_cost.toFixed(0)} 点。请先充值。`);
+      }
       // 检查是否为任务不存在错误
-      if (error.response && error.response.status === 400 && 
+      else if (error.response && error.response.status === 400 && 
           error.response.data && error.response.data.error === "无效的任务ID") {
         setError('任务已过期或不存在，请返回上传页面重新上传文件');
       } else if (error.code === 'ERR_NETWORK') {

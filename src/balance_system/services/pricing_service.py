@@ -14,56 +14,21 @@ class PricingService:
     
     # 新的定价规则 - 基于文件大小和音频时长
     DEFAULT_PRICING_RULES = {
-        'base': {
-            'base_fee': 10,           # 基础费用，固定为10点
-            'base_fee_weight': 1,     # 基础费用权重，固定为1
-            'duration_fee': 5,        # 每分钟时长费用基础数值
-            'duration_fee_weight': 1, # 时长费用权重，可根据模型调整
-            'file_size_fee': 5,       # 每MB文件大小费用基础数值
-            'file_size_fee_weight': 1 # 文件大小费用权重，可根据模型调整
-        },
-        # 不同模型大小的权重系数不同，基础费用和基础数值保持一致
-        'tiny': {
-            'base_fee': 10,
-            'base_fee_weight': 1,
-            'duration_fee': 5,
-            'duration_fee_weight': 0.6,  # 更轻量级的模型，时长费用较低
-            'file_size_fee': 5,
-            'file_size_fee_weight': 0.7  # 更轻量级的模型，文件大小费用较低
-        },
-        'small': {
-            'base_fee': 10,
-            'base_fee_weight': 1,
-            'duration_fee': 5,
-            'duration_fee_weight': 1.2,  # 较大的模型，时长费用略高
-            'file_size_fee': 5,
-            'file_size_fee_weight': 1.1  # 较大的模型，文件大小费用略高
-        },
-        'medium': {
-            'base_fee': 10,
-            'base_fee_weight': 1,
-            'duration_fee': 5,
-            'duration_fee_weight': 1.5,  # 中等大小的模型，时长费用更高
-            'file_size_fee': 5,
-            'file_size_fee_weight': 1.3  # 中等大小的模型，文件大小费用更高
-        },
-        'large': {
-            'base_fee': 10,
-            'base_fee_weight': 1,
-            'duration_fee': 5,
-            'duration_fee_weight': 2.0,  # 最大的模型，时长费用最高
-            'file_size_fee': 5,
-            'file_size_fee_weight': 1.5  # 最大的模型，文件大小费用最高
-        }
+        'base_fee': 10,           # 基础费用，固定为10点
+        'base_fee_weight': 1,     # 基础费用权重，固定为1
+        'duration_fee': 5,        # 每分钟时长费用基础数值
+        'duration_fee_weight': 1, # 时长费用权重，可根据模型调整
+        'file_size_fee': 5,       # 每MB文件大小费用基础数值
+        'file_size_fee_weight': 1, # 文件大小费用权重，可根据模型调整
+        'discount_rate': 1,   # 折扣率，默认100%
     }
     
     @staticmethod
-    def estimate_cost(file_size_mb: float, model_size: str, audio_duration_minutes: Optional[float] = None) -> Dict[str, Any]:
+    def estimate_cost(file_size_mb: float, audio_duration_minutes: Optional[float] = None) -> Dict[str, Any]:
         """估算处理费用
         
         Args:
-            file_size_mb: 文件大小（MB）
-            model_size: 模型大小（tiny/base/small/medium/large）
+            file_size_mb: 文件大小（MB）=
             audio_duration_minutes: 音频时长（分钟），如果未提供，将根据文件大小估算
             
         Returns:
@@ -71,10 +36,7 @@ class PricingService:
         """
         try:
             # 获取定价规则
-            rule = PricingService.DEFAULT_PRICING_RULES.get(model_size)
-            if not rule:
-                rule = PricingService.DEFAULT_PRICING_RULES.get('base')
-                logger.warning(f"未找到模型 {model_size} 的定价规则，使用基础规则")
+            rule = PricingService.DEFAULT_PRICING_RULES
             
             # 如果未提供音频时长，根据文件大小进行估算
             # 假设平均每分钟音频约2MB (根据实际情况调整)
@@ -92,7 +54,7 @@ class PricingService:
             file_size_fee = Decimal(str(rule['file_size_fee'])) * Decimal(str(rule['file_size_fee_weight'])) * Decimal(str(file_size_mb))
             
             # 总费用
-            total_cost = base_fee + duration_fee + file_size_fee
+            total_cost = (base_fee + duration_fee + file_size_fee) * Decimal(str(rule['discount_rate']))
             
             return {
                 "estimated_cost": float(total_cost),
@@ -101,8 +63,8 @@ class PricingService:
                     "duration_fee": float(duration_fee),
                     "file_size_fee": float(file_size_fee),
                     "file_size_mb": float(file_size_mb),
-                    "audio_duration_minutes": float(audio_duration_minutes),
-                    "model_size": model_size
+                    "discount_rate": float(rule['discount_rate']),
+                    "audio_duration_minutes": float(audio_duration_minutes)
                 }
             }
         except Exception as e:
@@ -112,18 +74,7 @@ class PricingService:
     @staticmethod
     def get_pricing_rules() -> List[Dict[str, Any]]:
         """获取所有定价规则"""
-        rules = []
-        for size, rule in PricingService.DEFAULT_PRICING_RULES.items():
-            rules.append({
-                "model_size": size,
-                "base_fee": float(rule["base_fee"]),
-                "base_fee_weight": float(rule["base_fee_weight"]),
-                "duration_fee": float(rule["duration_fee"]),
-                "duration_fee_weight": float(rule["duration_fee_weight"]),
-                "file_size_fee": float(rule["file_size_fee"]),
-                "file_size_fee_weight": float(rule["file_size_fee_weight"])
-            })
-        return rules
+        return PricingService.DEFAULT_PRICING_RULES
     
     @staticmethod
     def get_charge_packages() -> List[Dict[str, Any]]:
@@ -151,30 +102,6 @@ class PricingService:
                 "description": "10000点数 = 80元"
             }
         ]
-    
-    @staticmethod
-    def get_all_model_pricing(file_size_mb: float, api_type: str = 'analysis', audio_duration_minutes: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
-        """
-        获取所有模型的定价预估
-        
-        Args:
-            file_size_mb: 文件大小，单位MB
-            api_type: API类型，默认为'analysis'
-            audio_duration_minutes: 音频时长（分钟），如果未提供，将根据文件大小估算
-            
-        Returns:
-            Dict: 包含所有模型的预估费用的字典
-        """
-        result = {}
-        for model_size in ['tiny', 'base', 'small', 'medium', 'large']:
-            try:
-                cost_info = PricingService.estimate_cost(file_size_mb, model_size, audio_duration_minutes)
-                result[model_size] = cost_info
-            except ValueError:
-                # 如果某个模型没有定价规则，跳过
-                continue
-        
-        return result
     
     @staticmethod
     def get_price(

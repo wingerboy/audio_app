@@ -21,7 +21,7 @@ class BaseDBConfig:
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         """数据库连接URI"""
-        return f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        return f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}?charset=utf8mb4&connect_timeout=10&init_command=SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
     
     def to_dict(self) -> Dict[str, Any]:
         """转换配置为字典"""

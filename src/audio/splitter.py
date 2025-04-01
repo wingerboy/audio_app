@@ -7,7 +7,7 @@ import subprocess
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pydub import AudioSegment
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 from ..temp.manager import TempFileManager
 
 class SplitOptions:

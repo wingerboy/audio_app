@@ -4,7 +4,7 @@
 import os
 # import torch  # 注释掉torch导入
 import logging
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 
 # 导入新的AI分析组件和转录器工厂
 from .ai import ContentAnalyzer

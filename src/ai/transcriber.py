@@ -6,9 +6,8 @@ import os
 import logging
 import concurrent.futures
 from pathlib import Path
-# 删除LoggingConfig导入，使用标准logging
-# from logging_config import LoggingConfig
-# 相对导入会在直接运行文件时失败
+from typing import Dict, Any, Optional
+from src.utils.logging_config import LoggingConfig
 
 import json
 import time
@@ -17,11 +16,8 @@ import requests
 import uuid
 import tempfile
 
-# 配置logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# 设置日志
+logger = LoggingConfig.setup_logging(log_level=logging.INFO)
 
 class TranscriptionResult:
     """转录结果类"""

@@ -8,9 +8,6 @@ from datetime import datetime
 class User(Base, TimestampMixin):
     __tablename__ = 'users'
     
-    # 新用户默认余额 (点数)
-    DEFAULT_BALANCE = Decimal('500.00')  # 默认赠送500点数
-    
     id = Column(String(36), primary_key=True, default=generate_uuid)
     username = Column(String(100), unique=True, nullable=False)
     email = Column(String(100), unique=True, nullable=False)
@@ -19,13 +16,14 @@ class User(Base, TimestampMixin):
     is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, nullable=True)
-    balance = Column(Numeric(10, 2), default=DEFAULT_BALANCE, nullable=False)
-    total_charged = Column(Numeric(10, 2), default=DEFAULT_BALANCE, nullable=False)  # 包含赠送金额
+    balance = Column(Numeric(10, 2), default=0, nullable=False)
+    total_charged = Column(Numeric(10, 2), default=0, nullable=False)  
     total_consumed = Column(Numeric(10, 2), default=0.00, nullable=False)
     
     # 关系
     transactions = relationship("TransactionRecord", backref="user")
     api_usages = relationship("ApiUsage", back_populates="user")
+    balance_record = relationship("UserBalance", back_populates="user", uselist=False, cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User {self.username}>"

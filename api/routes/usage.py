@@ -1,10 +1,13 @@
 from flask import Blueprint, request, jsonify, current_app
+import os
+import json
 import logging
 from api.auth import login_required, get_current_user
 from src.balance_system.services.api_usage_service import ApiUsageService
+from src.utils.logging_config import LoggingConfig
 
-# 初始化日志
-logger = logging.getLogger(__name__)
+# 设置日志
+logger = LoggingConfig.setup_logging(log_level=logging.INFO)
 
 # 创建蓝图
 bp = Blueprint('usage_bp', __name__, url_prefix='/api/usage')

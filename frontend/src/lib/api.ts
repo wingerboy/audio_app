@@ -1,8 +1,8 @@
 import axios from 'axios';
 
 // 获取API基础URL
-// const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002/api';
-const API_BASE_URL = 'http://8.155.13.90:5002/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002/api';
+// const API_BASE_URL = 'http://8.155.13.90:5002/api';
 // 创建API客户端
 const api = axios.create({
   baseURL: API_BASE_URL, // 使用环境变量中的API地址
@@ -41,6 +41,12 @@ export interface UploadResponse {
   task_id: string;
   filename: string;
   size_mb: number;
+  audio_duration_seconds: number;
+  audio_duration_minutes: number;
+  estimated_costs?: {
+    analyze: number;
+    split: number;
+  };
 }
 
 export interface Segment {
@@ -56,6 +62,7 @@ export interface AnalyzeResponse {
   message: string;
   segments: Segment[];
   text: string;
+  task_status?: TaskStatus;
 }
 
 export interface OutputFile {
@@ -72,6 +79,7 @@ export interface SplitResponse {
   status: string;
   message: string;
   files: OutputFile[];
+  task_status?: TaskStatus;
 }
 
 export interface TaskStatus {
@@ -85,6 +93,8 @@ export interface TaskStatus {
   segments_count?: number;
   files_info?: OutputFile[];
   user_id?: string;
+  audio_duration_seconds?: number;
+  audio_duration_minutes?: number;
 }
 
 // 用户相关类型
@@ -201,6 +211,8 @@ async function estimateCost(options: {taskId?: string, fileSizeMb?: number, mode
 }
 
 // 检查用户余额是否足够进行音频分析
+// 注意：当调用 analyzeAudio 时，服务器会自动检查余额，所以不再需要单独调用此函数
+// 此函数保留用于需要提前获取费用预估的场景
 async function checkBalance(options: {taskId?: string, fileSizeMb?: number, modelSize: string, audioDurationMinutes?: number}): Promise<BalanceCheckResult> {
   const { taskId, fileSizeMb, modelSize, audioDurationMinutes } = options;
   
@@ -228,7 +240,7 @@ async function checkBalance(options: {taskId?: string, fileSizeMb?: number, mode
     data.audio_duration_minutes = audioDurationMinutes;
   }
   
-  const response = await api.post('/balance/check_analyze', data);
+  const response = await api.post('/api/balance/check_analyze', data);
   return response.data;
 }
 
@@ -308,6 +320,16 @@ export const apiService = {
     const response = await api.post('/analyze', {
       task_id: taskId
     });
+    
+    // 由于我们需要及时获取最新的任务状态，我们在此处添加一个获取操作
+    try {
+      const taskStatus = await api.get(`/tasks/${taskId}`);
+      // 将任务状态添加到响应中
+      response.data.task_status = taskStatus.data;
+    } catch (error) {
+      console.warn('获取最新任务状态失败:', error);
+    }
+    
     return response.data;
   },
 
@@ -324,6 +346,16 @@ export const apiService = {
       output_format: outputFormat,
       output_quality: outputQuality,
     });
+    
+    // 由于我们需要及时获取最新的任务状态，我们在此处添加一个获取操作
+    try {
+      const taskStatus = await api.get(`/tasks/${taskId}`);
+      // 将任务状态添加到响应中
+      response.data.task_status = taskStatus.data;
+    } catch (error) {
+      console.warn('获取最新任务状态失败:', error);
+    }
+    
     return response.data;
   },
 

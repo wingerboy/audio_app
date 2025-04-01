@@ -63,20 +63,23 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
     
     fetchTaskDetails();
     
-    // 定期刷新任务状态
-    const intervalId = setInterval(async () => {
-      try {
-        const updatedTask = await apiService.getTaskStatus(taskId);
-        setCurrentTask(updatedTask);
-      } catch (error) {
-        console.error('刷新任务状态失败:', error);
-      }
-    }, 5000); // 每5秒刷新一次
-    
+    // 不再使用轮询，改为事件驱动模式
     return () => {
-      clearInterval(intervalId);
+      // 清理工作（如果需要）
     };
   }, [taskId, setCurrentTask, setCurrentStep]);
+  
+  // 手动刷新任务状态
+  const refreshTaskStatus = async () => {
+    try {
+      setLoading(true);
+      const updatedTask = await apiService.getTaskStatus(taskId);
+      setCurrentTask(updatedTask);
+      setLoading(false);
+    } catch (error) {
+      console.error('刷新任务状态失败:', error);
+    }
+  };
   
   // 渲染步骤
   const renderStepContent = () => {
@@ -205,7 +208,19 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
           <>
             {currentTask && (
               <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md border border-gray-200 dark:border-gray-700 mb-6">
-                <h2 className="text-lg font-medium mb-4 text-gray-900 dark:text-white">任务信息</h2>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-medium text-gray-900 dark:text-white">任务信息</h2>
+                  <button
+                    onClick={refreshTaskStatus}
+                    disabled={loading}
+                    className="text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-300 flex items-center"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    刷新状态
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
                     <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">文件名</p>
@@ -215,6 +230,15 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
                     <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">大小</p>
                     <p className="font-semibold text-gray-900 dark:text-white">{currentTask.size_mb.toFixed(2)} MB</p>
                   </div>
+                  {currentTask.audio_duration_minutes && (
+                    <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
+                      <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">音频时长</p>
+                      <p className="font-semibold text-gray-900 dark:text-white">
+                        {Math.floor(currentTask.audio_duration_minutes)}分{Math.floor((currentTask.audio_duration_minutes % 1) * 60)}秒
+                        ({currentTask.audio_duration_minutes.toFixed(2)} 分钟)
+                      </p>
+                    </div>
+                  )}
                   <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
                     <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">状态</p>
                     <span className={`inline-flex px-3 py-1 rounded-full text-sm font-medium ${getStatusStyle(currentTask.status)}`}>

@@ -10,7 +10,7 @@ import platform
 import subprocess
 import logging
 from urllib.request import urlretrieve
-from logging_config import LoggingConfig
+from src.utils.logging_config import LoggingConfig
 
 # 获取模块的logger
 logger = LoggingConfig.get_logger(__name__)
