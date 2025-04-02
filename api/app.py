@@ -18,8 +18,6 @@ from dotenv import load_dotenv
 from api.auth import setup_jwt, login_required, admin_required, get_current_user
 from typing import Optional, Dict
 from src.utils.logging_config import LoggingConfig, RequestContext
-from api.decorators import balance_check_required  # 导入余额检查装饰器
-from functools import wraps
 
 # 添加项目根目录到 Python 路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
