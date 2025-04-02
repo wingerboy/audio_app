@@ -238,7 +238,7 @@ def register():
         
         return jsonify({
             'status': 'success',
-            'message': '注册成功，已赠送500点数，100点=1元',
+            'message': '注册成功，已赠送50点数，100点=1元',
             'user': {
                 'id': new_user.id,
                 'username': new_user.username,
@@ -708,6 +708,32 @@ def analyze_audio():
         task["status"] = "analyzed"
         task["progress"] = 100
         task["message"] = "分析完成"
+        
+        # 扣除用户余额
+        try:
+            from src.balance_system.services.api_usage_service import ApiUsageService
+            
+            # 获取音频时长（分钟）和文件大小
+            audio_duration_minutes = task.get("audio_duration_minutes", 0)
+            file_size_mb = task.get("size_mb", 0)
+            estimated_cost = task.get("estimated_cost", 0)
+            model_size = task.get("model_size", "base")
+            original_file = task.get("original_file", "")
+            
+            # 记录API使用并扣除余额
+            usage_result = ApiUsageService.record_api_usage(
+                user_id=user_id,
+                api_type="analyze_audio",
+                task_id=task_id,
+                cost=estimated_cost,
+                input_size=file_size_mb,
+                duration=audio_duration_minutes * 60,  # 转换为秒
+                details=f"analyze file {original_file}"
+            )
+            
+            logger.info(f"成功扣除用户 {user_id} 余额: {estimated_cost} 点")
+        except Exception as e:
+            logger.error(f"扣除用户余额失败: {str(e)}")
         
         # 返回结果
         return jsonify({

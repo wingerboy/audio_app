@@ -257,6 +257,21 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
                       {new Date(currentTask.created_at * 1000).toLocaleString()}
                     </p>
                   </div>
+                  
+                  {currentTask.estimated_cost !== undefined && (
+                    <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md border border-gray-100 dark:border-gray-700">
+                      <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">预估费用</p>
+                      <p className="font-semibold text-gray-900 dark:text-white flex items-center">
+                        <span className="mr-1">{currentTask.estimated_cost.toFixed(0)}</span>
+                        <span className="text-primary-600 dark:text-primary-400">点数</span>
+                        {currentTask.status === 'uploaded' && (
+                          <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                            (分析完成后将扣除)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )}
                 </div>
                 
                 {currentTask.progress !== undefined && currentTask.progress > 0 && currentTask.progress < 100 && (

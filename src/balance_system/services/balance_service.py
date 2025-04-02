@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class BalanceService:
     @staticmethod
-    def record_register_balance(user_id: str, points: int = 500) -> Dict[str, Any]:
+    def record_register_balance(user_id: str, points: int = 50) -> Dict[str, Any]:
         """记录注册赠送点数
         
         Args:

@@ -95,6 +95,7 @@ export interface TaskStatus {
   user_id?: string;
   audio_duration_seconds?: number;
   audio_duration_minutes?: number;
+  estimated_cost?: number;
 }
 
 // 用户相关类型

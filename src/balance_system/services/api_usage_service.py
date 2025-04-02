@@ -16,31 +16,18 @@ class ApiUsageService:
         user_id: str,
         api_type: str,
         task_id: str,
-        model_size: Optional[str] = None,
+        cost: Optional[float] = None,
         input_size: Optional[float] = None,
         duration: Optional[float] = None,
         details: Optional[str] = None
     ) -> Dict[str, Any]:
         """记录API使用并扣除余额"""
-        # 计算价格
-        try:
-            price_info = PricingService.get_price(
-                api_type=api_type,
-                model_size=model_size,
-                duration=duration,
-                file_size=input_size
-            )
-            cost = price_info["price"]
-        except ValueError as e:
-            logger.error(f"计算价格失败: {e}")
-            raise
-        
         # 扣除余额
         try:
             consume_result = BalanceService.consume_user_balance(
                 user_id=user_id,
                 amount=cost,
-                description=f"use {api_type} service" + (f" ({model_size})" if model_size else "")
+                description=f"use {api_type} service"
             )
         except ValueError as e:
             logger.error(f"扣除余额失败: {e}")
@@ -52,7 +39,7 @@ class ApiUsageService:
             api_usage = ApiUsage(
                 user_id=user_id,
                 api_type=api_type,
-                model_size=model_size,
+                model_size="",
                 cost=Decimal(str(cost)),
                 input_size=input_size,
                 duration=duration,

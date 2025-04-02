@@ -86,6 +86,14 @@ export function StatusBar({ task }: StatusBarProps) {
           {task.message}
         </div>
       )}
+      
+      {task.estimated_cost !== undefined && task.status === 'uploaded' && (
+        <div className="mt-2 text-sm flex items-center">
+          <span className="text-gray-600 mr-2">预估费用:</span>
+          <span className="font-medium text-primary-600">{task.estimated_cost.toFixed(0)} 点数</span>
+          <span className="ml-2 text-xs text-gray-500">(分析完成后将扣除)</span>
+        </div>
+      )}
     </div>
   );
 } 

@@ -88,6 +88,19 @@ export function ModelSelector() {
       <div className="card-body">
         <p className="mb-4">点击下方按钮开始音频内容分析，分析完成后可以查看结果并分割音频。</p>
         
+        {currentTask.estimated_cost !== undefined && (
+          <div className="bg-primary-50 border border-primary-100 rounded p-3 mb-4 flex items-center">
+            <FiDollarSign className="text-primary-500 mr-2" />
+            <div>
+              <p className="text-gray-700">
+                <span className="font-medium">预估费用: </span>
+                <span className="text-primary-600 font-semibold">{currentTask.estimated_cost.toFixed(0)} 点数</span>
+              </p>
+              <p className="text-xs text-gray-500">分析完成后将从您的账户中扣除</p>
+            </div>
+          </div>
+        )}
+        
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-500 p-3 rounded mb-4">
             {error}
