@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { FiScissors, FiDownload } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import apiService from '@/lib/api';
+import { TimeRangeSlider } from './TimeRangeSlider';
 
 export function AudioSplitter() {
   // 使用应用状态
@@ -16,7 +17,9 @@ export function AudioSplitter() {
     setOutputFiles,
     uiState,
     setIsSplitting,
-    setCurrentStep
+    setCurrentStep,
+    clearSelectedSegments,
+    selectSegment
   } = useAppStore();
   
   // 本地状态
@@ -87,6 +90,22 @@ export function AudioSplitter() {
       </div>
       
       <div className="card-body space-y-6">
+        {/* 添加时间范围滑块 */}
+        {segments.length > 0 && currentTask?.audio_duration_seconds && (
+          <TimeRangeSlider 
+            audioDuration={currentTask.audio_duration_seconds}
+            segments={segments}
+            onSelectionChange={(selected) => {
+              // 清除当前选择
+              clearSelectedSegments();
+              // 逐个添加新选择的分段
+              selected.forEach(segment => {
+                selectSegment(segment);
+              });
+            }}
+          />
+        )}
+        
         <div>
           <p className="text-sm text-gray-600 mb-4">
             {selectedSegments.length > 0 

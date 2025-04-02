@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { FiCheckCircle, FiCircle, FiEdit, FiSearch } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import { Segment } from '@/lib/api';
+import { TimeRangeSlider } from './TimeRangeSlider';
 
 export function SegmentsList() {
   // 使用应用状态
@@ -70,6 +71,17 @@ export function SegmentsList() {
     }
   };
   
+  // 处理时间范围选择
+  const handleTimeRangeSelection = (selectedByTime: Segment[]) => {
+    // 先清除当前选择
+    clearSelectedSegments();
+    
+    // 添加时间范围内的分段
+    selectedByTime.forEach(segment => {
+      selectSegment(segment);
+    });
+  };
+  
   return (
     <div className="card mb-8">
       <div className="card-header">
@@ -77,23 +89,36 @@ export function SegmentsList() {
       </div>
       
       <div className="card-body">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col md:flex-row md:justify-between md:items-center mb-4 space-y-3 md:space-y-0">
           <p className="text-sm text-gray-600">
             共 {segments.length} 个分段，已选择 {selectedSegments.length} 个
           </p>
           
-          <div className="flex items-center space-x-4">
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <FiSearch className="text-gray-400" />
+          <div className="flex flex-col md:flex-row md:items-center space-y-2 md:space-y-0 md:space-x-4">
+            <div className="flex items-center space-x-2">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <FiSearch className="text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="搜索内容..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                />
               </div>
-              <input
-                type="text"
-                placeholder="搜索内容..."
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-              />
+              
+              {currentTask.audio_duration_seconds && (
+                <div className="flex items-center bg-gray-50 dark:bg-gray-800 p-1 rounded-md border border-gray-200 dark:border-gray-700">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 mr-2 whitespace-nowrap">按时间选择:</span>
+                  <TimeRangeSlider 
+                    audioDuration={currentTask.audio_duration_seconds}
+                    segments={segments}
+                    onSelectionChange={handleTimeRangeSelection}
+                  />
+                </div>
+              )}
             </div>
             
             <button

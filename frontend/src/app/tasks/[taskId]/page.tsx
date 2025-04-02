@@ -10,6 +10,7 @@ import { AudioSplitter } from '@/components/AudioSplitter';
 import { DownloadFiles } from '@/components/DownloadFiles';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { TimeRangeSlider } from '@/components/TimeRangeSlider';
 
 // 步骤定义
 const STEPS = {
@@ -23,11 +24,14 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
   const taskId = params.taskId;
   
   // 全局状态
-  const { currentTask, setCurrentTask, setCurrentStep, uiState } = useAppStore((state) => ({
+  const { currentTask, setCurrentTask, setCurrentStep, uiState, segments, clearSelectedSegments, selectSegment } = useAppStore((state) => ({
     currentTask: state.currentTask,
     setCurrentTask: state.setCurrentTask,
     setCurrentStep: state.setCurrentStep,
-    uiState: state.uiState
+    uiState: state.uiState,
+    segments: state.segments,
+    clearSelectedSegments: state.clearSelectedSegments,
+    selectSegment: state.selectSegment
   }));
   
   // 本地状态
@@ -93,7 +97,9 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
       case STEPS.SEGMENTS:
         return (
           <>
+            {/* 分段列表 */}
             <SegmentsList />
+            {/* 分割组件 */}
             <AudioSplitter />
           </>
         );
