@@ -33,7 +33,7 @@ class BalanceService:
             expires_at = datetime.utcnow() + timedelta(days=30)
             decimal_points = Decimal(str(points))
             
-            # 更新用户余额
+            # 更新用户余额 (User表)
             user.balance += decimal_points
             user.total_charged += decimal_points
             
@@ -48,8 +48,10 @@ class BalanceService:
                 )
                 db_session.add(balance_record)
             else:
-                balance_record.balance += decimal_points
-                balance_record.total_charged += decimal_points
+                # 确保UserBalance与User表数据一致
+                balance_record.balance = user.balance
+                balance_record.total_charged = user.total_charged
+                balance_record.total_consumed = user.total_consumed
             
             # 创建交易记录
             transaction = TransactionRecord(
@@ -107,10 +109,25 @@ class BalanceService:
             if not user:
                 raise ValueError("用户不存在")
             
-            # 更新余额
+            # 更新User表中的余额
             decimal_amount = Decimal(str(amount))
             user.balance += decimal_amount
             user.total_charged += decimal_amount
+            
+            # 同时更新UserBalance表中的余额
+            balance_record = db_session.query(UserBalance).filter(UserBalance.user_id == user_id).first()
+            if balance_record:
+                balance_record.balance += decimal_amount
+                balance_record.total_charged += decimal_amount
+            else:
+                # 如果不存在，则创建新记录
+                balance_record = UserBalance(
+                    user_id=user_id,
+                    balance=user.balance,
+                    total_charged=user.total_charged,
+                    total_consumed=user.total_consumed
+                )
+                db_session.add(balance_record)
             
             # 创建交易记录
             transaction = TransactionRecord(
@@ -159,9 +176,24 @@ class BalanceService:
             if user.balance < decimal_amount:
                 raise ValueError("余额不足")
             
-            # 更新余额
+            # 更新User表中的余额
             user.balance -= decimal_amount
             user.total_consumed += decimal_amount
+            
+            # 同时更新UserBalance表中的余额
+            balance_record = db_session.query(UserBalance).filter(UserBalance.user_id == user_id).first()
+            if balance_record:
+                balance_record.balance -= decimal_amount
+                balance_record.total_consumed += decimal_amount
+            else:
+                # 如果不存在，则创建新记录（通常不会发生，因为User创建时应该也创建了UserBalance）
+                balance_record = UserBalance(
+                    user_id=user_id,
+                    balance=user.balance,
+                    total_charged=user.total_charged,
+                    total_consumed=user.total_consumed
+                )
+                db_session.add(balance_record)
             
             # 创建交易记录
             transaction = TransactionRecord(
