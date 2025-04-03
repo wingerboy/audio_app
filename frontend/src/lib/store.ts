@@ -107,6 +107,9 @@ export interface AppState {
   // 定价相关
   modelsPricing: ModelsPricing | null;
   setModelsPricing: (pricing: ModelsPricing | null) => void;
+  
+  // 开发测试用：设置当前用户为管理员
+  setCurrentUserAsAdmin: () => void;
 }
 
 // 创建状态存储
@@ -242,6 +245,24 @@ export const useAppStore = create<AppState>()(
             user,
           },
         }));
+      },
+      
+      // 开发测试用：设置当前用户为管理员
+      setCurrentUserAsAdmin: () => {
+        set((state) => {
+          if (state.auth.user) {
+            return {
+              auth: {
+                ...state.auth,
+                user: {
+                  ...state.auth.user,
+                  is_admin: true
+                }
+              }
+            };
+          }
+          return state;
+        });
       },
       
       setAuthInitialized: (value) => {

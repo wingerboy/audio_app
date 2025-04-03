@@ -14,11 +14,11 @@ class PricingService:
     
     # 新的定价规则 - 基于文件大小和音频时长
     DEFAULT_PRICING_RULES = {
-        'base_fee': 10,           # 基础费用，固定为10点
+        'base_fee': 5,           # 基础费用，固定为10点
         'base_fee_weight': 1,     # 基础费用权重，固定为1
-        'duration_fee': 10,        # 每分钟时长费用基础数值
+        'duration_fee': 1.5,        # 每分钟时长费用基础数值
         'duration_fee_weight': 1, # 时长费用权重，可根据模型调整
-        'file_size_fee': 3,       # 每MB文件大小费用基础数值
+        'file_size_fee': 1,       # 每MB文件大小费用基础数值
         'file_size_fee_weight': 1, # 文件大小费用权重，可根据模型调整
         'discount_rate': 1,   # 折扣率，默认100%
     }

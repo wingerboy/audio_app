@@ -294,9 +294,15 @@ class DashScopeTranscriber(BaseTranscriber):
                         "text": sentence_text
                     })
             else:
-                # 基于标点符号分句
+                # 基于句子自然结束点（句号等）分段，同时考虑最大长度限制
                 current_sentence = []
                 sentence_start_time = all_words[0]['begin_time'] / 1000 if all_words else 0
+                
+                MAX_SENTENCE_DURATION = 10  # 最大句子时长为10秒
+                
+                # 定义标点符号集合
+                end_punctuation = ['。', '！', '？', '.', '!', '?']  # 结束标点（句子自然终结点）
+                other_punctuation = ['，', ',', '；', ';', '：', ':']  # 其他标点（仅在句子过长时使用）
                 
                 for word in all_words:
                     word_text = word.get('text', '')
@@ -305,11 +311,24 @@ class DashScopeTranscriber(BaseTranscriber):
                     word_end_time = word.get('end_time', 0) / 1000  # 转换为秒
                     
                     current_sentence.append(word)
+                    current_duration = word_end_time - sentence_start_time
                     
-                    # 如果是句末标点(。!?等)或者较长的停顿，认为是句子结束
-                    if word_punctuation in ['。', '！', '，', '？', '.', '!', '?'] or \
-                       (len(current_sentence) > 1 and word_end_time - word_begin_time > 0.8):
-                        
+                    # 判断是否应该结束当前句子
+                    should_end_sentence = False
+                    
+                    # 条件1: 遇到结束标点(句号、问号、感叹号)时，总是分割句子
+                    if word_punctuation in end_punctuation:
+                        should_end_sentence = True
+                    
+                    # 条件2: 如果句子超过最大长度(10秒)，且遇到其他标点(逗号等)时分割
+                    if current_duration >= MAX_SENTENCE_DURATION and word_punctuation in other_punctuation:
+                        should_end_sentence = True
+                    
+                    # 条件3: 如果是最后一个词，结束当前句子
+                    if word is all_words[-1]:
+                        should_end_sentence = True
+                    
+                    if should_end_sentence:
                         # 构建句子文本
                         sentence_text = ''.join([w.get('text', '') + w.get('punctuation', '') for w in current_sentence])
                         sentence_end_time = word_end_time
@@ -326,7 +345,7 @@ class DashScopeTranscriber(BaseTranscriber):
                         if word is not all_words[-1]:  # 如果不是最后一个词
                             sentence_start_time = all_words[all_words.index(word) + 1].get('begin_time', 0) / 1000
                 
-                # 处理最后一个可能未结束的句子
+                # 处理最后一个可能未结束的句子 - 这部分可能已经在循环中处理了，但保留以防万一
                 if current_sentence:
                     sentence_text = ''.join([w.get('text', '') + w.get('punctuation', '') for w in current_sentence])
                     sentence_end_time = current_sentence[-1].get('end_time', 0) / 1000

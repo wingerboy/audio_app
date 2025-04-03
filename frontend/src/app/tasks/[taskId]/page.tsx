@@ -10,7 +10,7 @@ import { AudioSplitter } from '@/components/AudioSplitter';
 import { DownloadFiles } from '@/components/DownloadFiles';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { TimeRangeSlider } from '@/components/TimeRangeSlider';
+import { StatusBar } from '@/components/StatusBar';
 
 // 步骤定义
 const STEPS = {

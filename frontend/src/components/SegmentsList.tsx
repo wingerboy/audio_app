@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { FiCheckCircle, FiCircle, FiEdit, FiSearch } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import { Segment } from '@/lib/api';
-import { TimeRangeSlider } from './TimeRangeSlider';
 
 export function SegmentsList() {
   // 使用应用状态
@@ -18,7 +17,7 @@ export function SegmentsList() {
   } = useAppStore();
   
   // 本地状态
-  const [searchQuery, setSearchQuery] = useState('');
+  const [filterQuery, setFilterQuery] = useState('');
   const [selectAll, setSelectAll] = useState(false);
   
   // 如果没有任务或分段数据，显示错误
@@ -33,10 +32,15 @@ export function SegmentsList() {
   }
   
   // 过滤分段
-  const filteredSegments = searchQuery.trim() 
-    ? segments.filter(segment => 
-        segment.text.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+  const filteredSegments = filterQuery.trim() 
+    ? segments.filter(segment => {
+        // 分割过滤关键词（支持中英文逗号）
+        const filterWords = filterQuery.split(/[,，]/).map(word => word.trim()).filter(word => word);
+        // 如果段落中包含任何一个过滤词，则过滤掉该段落
+        return !filterWords.some(word => 
+          segment.text.toLowerCase().includes(word.toLowerCase())
+        );
+      })
     : segments;
   
   // 格式化时间
@@ -71,17 +75,6 @@ export function SegmentsList() {
     }
   };
   
-  // 处理时间范围选择
-  const handleTimeRangeSelection = (selectedByTime: Segment[]) => {
-    // 先清除当前选择
-    clearSelectedSegments();
-    
-    // 添加时间范围内的分段
-    selectedByTime.forEach(segment => {
-      selectSegment(segment);
-    });
-  };
-  
   return (
     <div className="card mb-8">
       <div className="card-header">
@@ -102,23 +95,12 @@ export function SegmentsList() {
                 </div>
                 <input
                   type="text"
-                  placeholder="搜索内容..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  placeholder="过滤内容(多个关键词用逗号分隔)..."
+                  value={filterQuery}
+                  onChange={e => setFilterQuery(e.target.value)}
+                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 w-full md:w-96"
                 />
               </div>
-              
-              {currentTask.audio_duration_seconds && (
-                <div className="flex items-center bg-gray-50 dark:bg-gray-800 p-1 rounded-md border border-gray-200 dark:border-gray-700">
-                  <span className="text-xs text-gray-500 dark:text-gray-400 mr-2 whitespace-nowrap">按时间选择:</span>
-                  <TimeRangeSlider 
-                    audioDuration={currentTask.audio_duration_seconds}
-                    segments={segments}
-                    onSelectionChange={handleTimeRangeSelection}
-                  />
-                </div>
-              )}
             </div>
             
             <button
@@ -194,7 +176,7 @@ export function SegmentsList() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatTime(segment.end - segment.start)}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900 max-w-md truncate">
+                    <td className="px-6 py-4 text-sm text-gray-900">
                       {segment.text}
                     </td>
                   </tr>
