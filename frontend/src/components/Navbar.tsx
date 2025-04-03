@@ -53,7 +53,7 @@ export function Navbar() {
         <div className="flex justify-between h-16">
           <div className="flex items-center">
             <Link href="/" className="flex items-center">
-              <span className="text-xl font-bold text-primary-600 dark:text-primary-400">音频处理控制台</span>
+              <span className="text-xl font-bold text-primary-600 dark:text-primary-400">吉米哥音频处理控制台</span>
             </Link>
           </div>
           

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { FiDownload, FiFile, FiTrash2 } from 'react-icons/fi';
+import { FiDownload, FiFile, FiTrash2, FiPackage } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import apiService from '@/lib/api';
 
@@ -45,6 +45,33 @@ export function DownloadFiles() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
   
+  // 清理文件名中的特殊字符
+  const sanitizeFileName = (fileName: string) => {
+    // 替换不允许在文件名中的字符
+    return fileName.replace(/[<>:"\/\\|?*]/g, '_');
+  };
+  
+  // 处理单个文件下载
+  const handleDownload = (url: string, fileName: string) => {
+    const cleanFileName = sanitizeFileName(fileName);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = cleanFileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  
+  // 处理全部文件下载
+  const handleDownloadAll = () => {
+    // 为避免浏览器阻止多个下载，间隔下载文件
+    outputFiles.forEach((file, index) => {
+      setTimeout(() => {
+        handleDownload(file.download_url, file.name);
+      }, index * 800); // 每800毫秒下载一个文件
+    });
+  };
+  
   // 处理清理资源
   const handleCleanup = async () => {
     if (!currentTask) return;
@@ -77,9 +104,19 @@ export function DownloadFiles() {
       </div>
       
       <div className="card-body space-y-6">
-        <p className="text-sm text-gray-600 mb-4">
-          音频分割完成，共生成 {outputFiles.length} 个文件
-        </p>
+        <div className="flex justify-between items-center mb-4">
+          <p className="text-sm text-gray-600">
+            音频分割完成，共生成 {outputFiles.length} 个文件
+          </p>
+          
+          <button
+            onClick={handleDownloadAll}
+            className="btn-primary flex items-center text-sm"
+          >
+            <FiPackage className="mr-1" />
+            一键全部下载
+          </button>
+        </div>
         
         <ul className="divide-y divide-gray-200">
           {outputFiles.map((file) => (
@@ -92,14 +129,13 @@ export function DownloadFiles() {
                 </div>
               </div>
               
-              <a
-                href={file.download_url}
-                download
+              <button
+                onClick={() => handleDownload(file.download_url, file.name)}
                 className="btn-secondary flex items-center text-sm"
               >
                 <FiDownload className="mr-1" />
                 下载
-              </a>
+              </button>
             </li>
           ))}
         </ul>

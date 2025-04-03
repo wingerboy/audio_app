@@ -110,7 +110,7 @@ function MainAppContent() {
 
   return (
     <div>
-      <h1 className="text-2xl font-semibold mb-4 text-gray-900 dark:text-white">音频处理控制台</h1>
+      <h1 className="text-2xl font-semibold mb-4 text-gray-900 dark:text-white">吉米哥音频处理控制台</h1>
       
       {systemStatus && (
         <div className="mb-6 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
