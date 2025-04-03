@@ -12,6 +12,7 @@ import subprocess
 from src.balance_system.models.user import User
 from src.balance_system.db import db_session
 from src.utils.logging_config import LoggingConfig
+from datetime import datetime
 
 # 设置日志
 logger = LoggingConfig.setup_logging(log_level=logging.INFO)
@@ -74,7 +75,7 @@ def check_analyze_balance_for_task(task_id, user_id, model_size='base'):
 @bp.route('/info', methods=['GET'])
 @login_required
 def get_balance_info():
-    """获取当前用户的点数信息"""
+    """获取当前用户的账户信息，包括余额和交易记录"""
     try:
         user = get_current_user()
         if not user:
@@ -86,23 +87,28 @@ def get_balance_info():
         # 检查点数是否过期
         balance_service.check_expired_balance(user_id)
         
-        # 获取用户余额信息 (点数)
+        # 获取用户余额信息
         balance_info = balance_service.get_user_balance(user_id)
         
+        # 获取用户交易记录
+        transactions, total = balance_service.get_user_transactions(user_id, page=1, per_page=100)
+        
+        # 格式化返回数据，符合前端的 BalanceInfo 接口要求
         return jsonify({
-            'status': 'success',
-            'data': {
-                'balance': balance_info['balance'],  # 点数余额
-                'total_charged': balance_info['total_charged'],  # 总充值点数
-                'total_consumed': balance_info['total_consumed'],  # 总消费点数
-                'points_to_money': '100点=1元'  # 点数兑换比例
-            }
+            'balance': balance_info['balance'],
+            'transactions': [{
+                'id': str(trans['id']),
+                'amount': trans['amount'],
+                'type': 'credit' if trans['transaction_type'] in ['charge', 'register', 'gift'] else 'debit',
+                'created_at': int(datetime.fromisoformat(trans['created_at']).timestamp()),
+                'description': trans['description'] or ''
+            } for trans in transactions]
         })
     except Exception as e:
-        logger.error(f"获取点数信息失败: {str(e)}")
+        logger.error(f"获取账户信息失败: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': f'获取点数信息失败: {str(e)}'
+            'message': f'获取账户信息失败: {str(e)}'
         }), 500
 
 @bp.route('/transactions', methods=['GET'])
@@ -246,7 +252,7 @@ def admin_charge_balance():
         data = request.json
         
         # 验证必要参数
-        required_fields = ['user_id', 'amount']
+        required_fields = ['email', 'amount']
         for field in required_fields:
             if field not in data:
                 return jsonify({
@@ -255,7 +261,7 @@ def admin_charge_balance():
                 }), 400
         
         # 提取参数
-        user_id = data.get('user_id')
+        email = data.get('email')
         amount = float(data.get('amount'))
         description = data.get('description', 'Administrator recharge')
         
@@ -266,6 +272,17 @@ def admin_charge_balance():
                 'message': '充值金额必须大于0'
             }), 400
         
+        # 根据邮箱查找用户
+        user_service = UserService()
+        user = user_service.get_user_by_email(email)
+        
+        if not user:
+            return jsonify({
+                'status': 'error',
+                'message': f'未找到邮箱为 {email} 的用户'
+            }), 404
+        
+        user_id = user.id
         balance_service = BalanceService()
         
         # 执行充值

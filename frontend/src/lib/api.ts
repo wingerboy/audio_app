@@ -108,6 +108,7 @@ export interface User {
   balance: number;
   total_charged: number;
   total_consumed: number;
+  is_admin?: boolean; // 添加管理员标识
 }
 
 export interface AuthResponse {
@@ -380,6 +381,21 @@ export const apiService = {
   getModelsPricing,
   estimateCost,
   checkBalance,
+
+  // 管理员充值接口
+  adminCharge: async (email: string, amount: number): Promise<any> => {
+    const response = await api.post('/balance/admin/charge', {
+      email: email,
+      amount: amount
+    });
+    return response.data;
+  },
+
+  // 获取余额信息
+  getBalanceInfo: async (): Promise<any> => {
+    const response = await api.get('/balance/info');
+    return response.data;
+  },
 };
 
 export default apiService; 
