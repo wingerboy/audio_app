@@ -17,6 +17,7 @@ export function DownloadFiles() {
   // 本地状态
   const [cleaningUp, setCleaningUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDownloadingZip, setIsDownloadingZip] = useState(false);
   
   // 没有任务或输出文件则显示错误
   if (!currentTask || outputFiles.length === 0) {
@@ -62,14 +63,36 @@ export function DownloadFiles() {
     document.body.removeChild(link);
   };
   
-  // 处理全部文件下载
-  const handleDownloadAll = () => {
-    // 为避免浏览器阻止多个下载，间隔下载文件
-    outputFiles.forEach((file, index) => {
+  // 处理下载ZIP压缩包
+  const handleDownloadZip = async () => {
+    if (!currentTask) return;
+    
+    try {
+      setIsDownloadingZip(true);
+      setError(null);
+      
+      // 调用API下载ZIP
+      const zipUrl = await apiService.downloadFilesAsZip(currentTask.id);
+      
+      // 创建下载链接
+      const link = document.createElement('a');
+      link.href = zipUrl;
+      link.download = `audio_segments_${currentTask.id}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // 释放URL对象
       setTimeout(() => {
-        handleDownload(file.download_url, file.name);
-      }, index * 800); // 每800毫秒下载一个文件
-    });
+        URL.revokeObjectURL(zipUrl);
+      }, 100);
+      
+    } catch (error) {
+      console.error('下载ZIP失败:', error);
+      setError('下载文件打包失败，请尝试单独下载或稍后重试。');
+    } finally {
+      setIsDownloadingZip(false);
+    }
   };
   
   // 处理清理资源
@@ -110,11 +133,24 @@ export function DownloadFiles() {
           </p>
           
           <button
-            onClick={handleDownloadAll}
-            className="btn-primary flex items-center text-sm"
+            onClick={handleDownloadZip}
+            disabled={isDownloadingZip}
+            className={`btn-primary flex items-center text-sm ${isDownloadingZip ? 'opacity-70 cursor-not-allowed' : ''}`}
           >
-            <FiPackage className="mr-1" />
-            一键全部下载
+            {isDownloadingZip ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                打包中...
+              </>
+            ) : (
+              <>
+                <FiPackage className="mr-1" />
+                下载ZIP压缩包
+              </>
+            )}
           </button>
         </div>
         
