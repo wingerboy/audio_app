@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { FiDownload, FiFile, FiTrash2, FiPackage } from 'react-icons/fi';
+import { FiDownload, FiCircle, FiCheckCircle, FiFile, FiTrash2, FiPackage } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
-import apiService from '@/lib/api';
+import apiService, {OutputFile, Segment} from '@/lib/api';
 
 export function DownloadFiles() {
   // 使用应用状态
@@ -11,13 +11,18 @@ export function DownloadFiles() {
     currentTask, 
     outputFiles,
     setCurrentStep,
-    resetState
+    resetState,
+    selectOutputFile,
+    unselectOutputFile,
+    selectedOutputFiles,
+    clearSelectedOutputfiles
   } = useAppStore();
   
   // 本地状态
   const [cleaningUp, setCleaningUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+  const [selectAll, setSelectAll] = useState(false);
+
   // 没有任务或输出文件则显示错误
   if (!currentTask || outputFiles.length === 0) {
     return (
@@ -50,7 +55,7 @@ export function DownloadFiles() {
     // 替换不允许在文件名中的字符
     return fileName.replace(/[<>:"\/\\|?*]/g, '_');
   };
-  
+
   // 处理单个文件下载
   const handleDownload = (url: string, fileName: string) => {
     const cleanFileName = sanitizeFileName(fileName);
@@ -61,17 +66,18 @@ export function DownloadFiles() {
     link.click();
     document.body.removeChild(link);
   };
-  
+
   // 处理全部文件下载
   const handleDownloadAll = () => {
     // 为避免浏览器阻止多个下载，间隔下载文件
-    outputFiles.forEach((file, index) => {
+    // outputFiles.forEach((file, index) => {
+    selectedOutputFiles.forEach((file, index) => {
       setTimeout(() => {
         handleDownload(file.download_url, file.name);
       }, index * 800); // 每800毫秒下载一个文件
     });
   };
-  
+
   // 处理清理资源
   const handleCleanup = async () => {
     if (!currentTask) return;
@@ -96,7 +102,45 @@ export function DownloadFiles() {
       setCleaningUp(false);
     }
   };
-  
+
+  // 处理单个选择
+  const handleSelect = (file: OutputFile) => {
+    // console.log("selectedOutputFiles size1 is ", selectedOutputFiles.length)
+    // console.log("file", file);
+    if (selectedOutputFiles.some(s => s.id === file.id)) {
+      // console.log("file", file);
+      unselectOutputFile(file.id);
+      // console.log("after un selectedOutputFiles size is ", selectedOutputFiles.length)
+      // selectedOutputFiles.forEach(f => {console.log(f.name)});
+    } else {
+      // console.log("file", file);
+      selectOutputFile(file);
+      // console.log("after handleSelect selectedOutputFiles size is ", selectedOutputFiles.length)
+      // selectedOutputFiles.forEach(f => {console.log(f.name)});
+    }
+  };
+
+  // 处理全选/全不选
+  const handleSelectAll = () => {
+    if (!selectAll) {
+      // 取消全选
+      clearSelectedOutputfiles();
+    } else {
+      // 全选
+      console.log("handleSelectAll selectedOutputFiles size is ", selectedOutputFiles.length)
+      outputFiles.forEach(file => {
+        if (!selectedOutputFiles.some(s => s.id === file.id)) {
+          console.log("selectAll ", file)
+          selectOutputFile(file);
+        }
+      });
+      console.log("selectAll selectedOutputFiles.length is", selectedOutputFiles.length);
+      // selectedOutputFiles.forEach(file => {
+      //   selectOutputFile(file);
+      // });
+    }
+    setSelectAll(!selectAll);
+  };
   return (
     <div className="card">
       <div className="card-header">
@@ -108,7 +152,6 @@ export function DownloadFiles() {
           <p className="text-sm text-gray-600">
             音频分割完成，共生成 {outputFiles.length} 个文件
           </p>
-          
           <button
             onClick={handleDownloadAll}
             className="btn-primary flex items-center text-sm"
@@ -117,11 +160,43 @@ export function DownloadFiles() {
             一键全部下载
           </button>
         </div>
+
+        <p>
+                <button
+                    type="button"
+                    onClick={handleSelectAll}
+                    className="flex items-center text-sm text-gray-600 hover:text-primary-600"
+                >
+                  {selectAll ? (
+                      <>
+                          <FiCircle className="mr-1" />
+                          取消全选
+                      </>
+                    ) : (
+                      <>
+                         <FiCheckCircle className="mr-1" />
+                         全选
+                      </>
+                    )}
+
+                </button>
+        </p>
         
         <ul className="divide-y divide-gray-200">
           {outputFiles.map((file) => (
             <li key={file.id} className="py-4 flex justify-between items-center">
               <div className="flex items-center">
+                <button
+                    type="button"
+                    onClick={() => handleSelect(file)}
+                    className="text-gray-400 hover:text-primary-600"
+                >
+                  {selectedOutputFiles.some(s => s.id === file.id) ? (
+                      <FiCheckCircle className="w-5 h-5 text-primary-600" />
+                  ) : (
+                      <FiCircle className="w-5 h-5" />
+                  )}
+                </button>
                 <FiFile className="w-6 h-6 text-primary-500 mr-3" />
                 <div>
                   <p className="font-medium">{file.name}</p>
@@ -180,4 +255,4 @@ export function DownloadFiles() {
       </div>
     </div>
   );
-} 
+}
