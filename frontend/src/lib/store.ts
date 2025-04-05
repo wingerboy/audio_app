@@ -62,6 +62,10 @@ export interface AppState {
   
   // 输出文件
   outputFiles: OutputFile[];
+  selectedOutputFiles: OutputFile[];
+  selectOutputFile: (file: OutputFile) => void;
+  unselectOutputFile: (fileId: number) => void;
+  clearSelectedOutputFiles: () => void;
   setOutputFiles: (files: OutputFile[]) => void;
   
   // 设置
@@ -149,6 +153,14 @@ export const useAppStore = create<AppState>()(
       // 输出文件
       outputFiles: [],
       setOutputFiles: (files) => set({ outputFiles: files }),
+      selectedOutputFiles: [],
+      selectOutputFile: (file) => set((state) => ({
+        selectedOutputFiles: [...state.selectedOutputFiles, file]
+      })),
+      unselectOutputFile: (fileId) => set((state) => ({
+        selectedOutputFiles: state.selectedOutputFiles.filter(f => f.id !== fileId)
+      })),
+      clearSelectedOutputfiles: () => set({ selectedOutputFiles: [] }),
       
       // 设置
       settings: {
@@ -189,6 +201,7 @@ export const useAppStore = create<AppState>()(
         segments: [],
         selectedSegments: [],
         outputFiles: [],
+        selectedOutputFiles: [],
         uiState: {
           ...state.uiState,
           currentStep: 1,
