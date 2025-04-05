@@ -160,7 +160,7 @@ export const useAppStore = create<AppState>()(
       unselectOutputFile: (fileId) => set((state) => ({
         selectedOutputFiles: state.selectedOutputFiles.filter(f => f.id !== fileId)
       })),
-      clearSelectedOutputfiles: () => set({ selectedOutputFiles: [] }),
+      clearSelectedOutputFiles: () => set({ selectedOutputFiles: [] }),
       
       // 设置
       settings: {

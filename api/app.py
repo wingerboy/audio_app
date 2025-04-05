@@ -581,7 +581,7 @@ def upload_file():
         "status": "uploaded",
         "progress": 0,
         "message": "文件已上传",
-        "created_at": time.time(),
+        "created_at": int(time.time()),  # 确保存储为整数时间戳
         "user_id": user_id,  # 记录用户ID
         "estimated_cost": estimated_cost  # 记录预估费用
     }
@@ -1037,6 +1037,51 @@ def get_user_info():
         'status': 'success',
         'data': user
     })
+
+@app.route('/api/user/last-task', methods=['GET'])
+@login_required
+def get_user_last_task():
+    """获取当前用户的最后一个任务"""
+    # 获取当前用户ID
+    user_id = get_jwt_identity()
+    if not user_id:
+        return jsonify({
+            'status': 'error',
+            'message': '未找到用户信息'
+        }), 401
+    
+    # 获取用户的所有任务
+    user_tasks = task_manager.get_user_tasks(user_id)
+    if not user_tasks:
+        return jsonify({
+            'status': 'error',
+            'message': '未找到任务'
+        }), 404
+    
+    # 按创建时间排序，获取最新任务
+    last_task = None
+    newest_time = 0
+    
+    for task_id, task in user_tasks.items():
+        created_at = task.get('created_at', 0)
+        if created_at > newest_time:
+            newest_time = created_at
+            last_task = task
+    
+    if not last_task:
+        return jsonify({
+            'status': 'error',
+            'message': '未找到任务'
+        }), 404
+    
+    # 清理敏感或过大的字段
+    task_info = {k: v for k, v in last_task.items() if k not in ["path", "audio_path", "transcription"]}
+    
+    # 如果有转录结果，添加段落数量
+    if "transcription" in last_task and "segments" in last_task["transcription"]:
+        task_info["segments_count"] = len(last_task["transcription"]["segments"])
+    
+    return jsonify(task_info)
 
 # 添加请求前钩子，自动设置日志上下文
 @app.before_request

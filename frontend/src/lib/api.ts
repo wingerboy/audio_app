@@ -397,6 +397,17 @@ export const apiService = {
     return response.data;
   },
   
+  // 获取当前用户的最后一个任务
+  getUserLastTask: async (): Promise<TaskStatus | null> => {
+    try {
+      const response = await api.get('/api/user/last-task');
+      return response.data;
+    } catch (error) {
+      console.error('获取用户最后一个任务失败', error);
+      return null;
+    }
+  },
+  
   // 下载所有文件的ZIP压缩包
   downloadFilesAsZip: async (taskId: string): Promise<string> => {
     const response = await api.get(`/download/${taskId}/zip`, { responseType: 'blob' });

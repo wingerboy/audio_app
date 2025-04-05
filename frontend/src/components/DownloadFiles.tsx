@@ -15,14 +15,14 @@ export function DownloadFiles() {
     selectOutputFile,
     unselectOutputFile,
     selectedOutputFiles,
-    clearSelectedOutputfiles
+    clearSelectedOutputFiles
   } = useAppStore();
   
   // 本地状态
   const [cleaningUp, setCleaningUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+  const [selectAll, setSelectAll] = useState(false);
 
   // 没有任务或输出文件则显示错误
   if (!currentTask || outputFiles.length === 0) {
@@ -146,7 +146,7 @@ export function DownloadFiles() {
   const handleSelectAll = () => {
     if (!selectAll) {
       // 取消全选
-      clearSelectedOutputfiles();
+      clearSelectedOutputFiles();
     } else {
       // 全选
       console.log("handleSelectAll selectedOutputFiles size is ", selectedOutputFiles.length)

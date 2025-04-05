@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/lib/store';
-import { apiService } from '@/lib/api';
+import { apiService, TaskStatus } from '@/lib/api';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 
@@ -86,16 +86,16 @@ function WelcomePage() {
 // 主应用内容 - 已认证用户
 function MainAppContent() {
   const router = useRouter();
-  const { currentTask, setCurrentTask } = useAppStore((state) => ({
+  const { currentTask, setCurrentTask, auth, systemStatus, setSystemStatus } = useAppStore((state) => ({
     currentTask: state.currentTask,
-    setCurrentTask: state.setCurrentTask
-  }));
-  const { systemStatus, setSystemStatus } = useAppStore((state) => ({
+    setCurrentTask: state.setCurrentTask,
+    auth: state.auth,
     systemStatus: state.systemStatus,
     setSystemStatus: state.setSystemStatus
   }));
 
   useEffect(() => {
+    // 获取系统状态
     const checkSystemStatus = async () => {
       try {
         const status = await apiService.getStatus();
@@ -105,8 +105,27 @@ function MainAppContent() {
       }
     };
 
+    // 检查当前任务是否属于当前登录用户
+    const validateCurrentTask = async () => {
+      // 如果没有当前任务或者用户ID不匹配，尝试获取用户的最后一个任务
+      if (!currentTask || currentTask.user_id !== auth.user?.id) {
+        try {
+          const task = await apiService.getUserLastTask();
+          if (task) {
+            setCurrentTask(task);
+          }
+        } catch (error) {
+          console.error('获取用户最后一个任务失败', error);
+        }
+      }
+    };
+
     checkSystemStatus();
-  }, [setSystemStatus]);
+    validateCurrentTask();
+  }, [setSystemStatus, setCurrentTask, currentTask, auth.user?.id]);
+
+  // 判断是否显示"继续上次任务"区块
+  const showLastTask = currentTask && currentTask.user_id === auth.user?.id;
 
   return (
     <div>
@@ -124,7 +143,7 @@ function MainAppContent() {
           </button>
         </div>
         
-        {currentTask && (
+        {showLastTask && (
           <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
             <h2 className="text-xl font-medium mb-4 text-gray-900 dark:text-white">继续上次任务</h2>
             <p className="mb-2 text-gray-700 dark:text-gray-300">
