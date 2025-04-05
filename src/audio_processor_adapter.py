@@ -17,14 +17,14 @@ class AudioProcessorAdapter:
     适配器类，提供与旧版AudioProcessor兼容的接口，但内部使用新的音频处理组件
     """
     
-    def __init__(self, use_disk_processing=True, chunk_size_mb=200, max_workers=2, auto_cleanup=True):
+    def __init__(self, use_disk_processing=True, chunk_size_mb=200, max_workers=None, auto_cleanup=True):
         """
         初始化音频处理器适配器
         
         Args:
             use_disk_processing (bool): 是否使用硬盘处理大文件
             chunk_size_mb (int): 处理大文件时的分块大小(MB)
-            max_workers (int): 并行处理的最大线程数
+            max_workers (int): 并行处理的最大线程数（默认为系统CPU核心数-1，最小为2）
             auto_cleanup (bool): 是否在析构时自动清理临时文件
         """
         self.logger = LoggingConfig.get_logger(__name__)
@@ -35,16 +35,31 @@ class AudioProcessorAdapter:
         # 创建音频转换器
         self.converter = AudioConverter()
         
+        # 设置最大线程数，默认为CPU核心数-1（至少为2）
+        if max_workers is None:
+            cpu_count = os.cpu_count() or 4  # 如果获取失败，默认为4
+            self.max_workers = max(2, cpu_count - 1)  # 至少为2
+        else:
+            self.max_workers = max(2, max_workers)  # 确保至少为2
+        
         # 创建音频分割器
-        self.splitter = AudioSplitter(max_workers=max_workers)
+        self.splitter = AudioSplitter(max_workers=self.max_workers)
         
         # 保存参数配置
         self.use_disk_processing = use_disk_processing
         self.chunk_size_mb = chunk_size_mb
-        self.max_workers = max_workers
         self.auto_cleanup = auto_cleanup
         
-        self.logger.info(f"初始化AudioProcessorAdapter: 硬盘处理={use_disk_processing}, 分块大小={chunk_size_mb}MB, 最大线程数={max_workers}, 自动清理={auto_cleanup}")
+        # 检查是否可使用PyAV
+        try:
+            import av
+            self.pyav_available = True
+            self.logger.info(f"检测到PyAV库 (版本: {av.__version__})，将优先使用PyAV处理音频")
+        except ImportError:
+            self.pyav_available = False
+            self.logger.warning("未检测到PyAV库，将使用FFmpeg处理音频")
+        
+        self.logger.info(f"初始化AudioProcessorAdapter: 硬盘处理={use_disk_processing}, 分块大小={chunk_size_mb}MB, 最大线程数={self.max_workers}, 自动清理={auto_cleanup}, CPU核心数={os.cpu_count()}")
     
     @property
     def temp_dir(self):

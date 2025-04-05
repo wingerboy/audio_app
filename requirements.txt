@@ -20,4 +20,6 @@ pyinstaller==5.13.0
 # 阿里云OSS对象存储服务SDK
 oss2==2.18.0
 # 阿里云DashScope语音转录服务SDK
-dashscope==1.13.6 
+dashscope==1.13.6
+# 高性能音视频处理库
+av==11.0.0 
