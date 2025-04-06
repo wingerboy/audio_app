@@ -401,6 +401,13 @@ export const apiService = {
     const response = await api.get('/balance/info');
     return response.data;
   },
+  
+  // 下载所有文件的ZIP压缩包
+  downloadFilesAsZip: async (taskId: string): Promise<string> => {
+    const response = await api.get(`/download/${taskId}/zip`, { responseType: 'blob' });
+    const blob = new Blob([response.data], { type: 'application/zip' });
+    return URL.createObjectURL(blob);
+  },
 };
 
 export default apiService; 

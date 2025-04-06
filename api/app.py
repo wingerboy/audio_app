@@ -1003,6 +1003,40 @@ def download_file(task_id, file_index):
     file_path = task["output_files"][file_index]
     return send_file(file_path, as_attachment=True)
 
+@app.route('/api/download/<task_id>/zip', methods=['GET'])
+def download_zip(task_id):
+    """下载所有分割文件的ZIP压缩包"""
+    import zipfile
+    import io
+    import os
+    
+    task = task_manager.get_task(task_id)
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    
+    if "output_files" not in task or not task["output_files"]:
+        return jsonify({"error": "没有可下载的文件"}), 404
+    
+    # 创建内存中的ZIP文件
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for file_path in task["output_files"]:
+            # 获取文件名，去除路径
+            file_name = os.path.basename(file_path)
+            # 添加文件到ZIP
+            zf.write(file_path, file_name)
+    
+    # 重置文件指针位置
+    memory_file.seek(0)
+    
+    # 返回ZIP文件
+    return send_file(
+        memory_file,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'audio_segments_{task_id}.zip'
+    )
+
 @app.route('/api/cleanup/<task_id>', methods=['DELETE'])
 def cleanup_task(task_id):
     """清理任务资源"""
