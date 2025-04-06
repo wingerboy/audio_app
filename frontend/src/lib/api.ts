@@ -281,6 +281,7 @@ export const apiService = {
   getCurrentUser: async (): Promise<User | null> => {
     try {
       const response = await api.get('/auth/me');
+      console.log("response.data.user is ",response.data.user);
       return response.data.user;
     } catch (error) {
       console.error('获取当前用户信息失败', error);
@@ -301,12 +302,16 @@ export const apiService = {
 
   // 上传文件
   uploadFile: async (file: File): Promise<UploadResponse> => {
+    console.log("uploadFile file is ", file);
     const formData = new FormData();
     formData.append('file', file);
-    
+    // formData.append('access_token', localStorage.getItem('auth_token'));
+
+    console.log("localStorage.getItem('auth_token') is ", localStorage.getItem('auth_token'));
     const response = await api.post('/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
+        // 'access_token': localStorage.getItem('auth_token')
       },
       onUploadProgress: (progressEvent) => {
         // 可以在这里实现进度回调

@@ -26,7 +26,8 @@ class TransactionRecord(Base):
     
     # 关系
     api_usages = relationship("ApiUsage", backref="transaction_record")
-    
+    user_task = relationship("UserTask", backref="transaction_record")
+
     def to_dict(self):
         """转换为字典"""
         return {
@@ -39,4 +40,4 @@ class TransactionRecord(Base):
             "operator": self.operator,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-        } 
+        }

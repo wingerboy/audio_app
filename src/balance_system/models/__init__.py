@@ -5,12 +5,14 @@ from src.balance_system.models.transaction_record import TransactionRecord, Tran
 from src.balance_system.models.api_usage import ApiUsage
 from src.balance_system.models.pricing_rule import PricingRule
 from src.balance_system.models.charge_package import ChargePackage
+from src.balance_system.models.user_task import UserTask
 
 __all__ = [
     'Base',
     'Session',
     'User',
     'UserBalance',
+    'UserTask',
     'TransactionRecord',
     'TransactionType',
     'ApiUsage',
