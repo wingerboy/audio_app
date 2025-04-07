@@ -306,6 +306,12 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         settings: state.settings,
         auth: state.auth, // 持久化认证信息
+        currentTask: state.currentTask,  // 保存当前任务状态
+        segments: state.segments,        // 保存分析后的段落
+        selectedSegments: state.selectedSegments, // 保存选择的段落
+        uiState: {
+          currentStep: state.uiState.currentStep,
+        },
       }),
     }
   )
