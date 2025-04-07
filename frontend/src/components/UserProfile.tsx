@@ -22,6 +22,24 @@ export function UserProfile() {
   const user = useAppStore(state => state.auth.user);
   const router = useRouter();
 
+  // 获取交易类型标签
+  const getTransactionTypeLabel = (type: string): string => {
+    switch(type) {
+      case 'credit':
+        return '充值';
+      case 'agent_charge':
+        return '代理充值';
+      case 'register':
+        return '注册赠送';
+      case 'agent_consume':
+        return '划扣支出';
+      case 'consume':
+        return '消费';
+      default:
+        return type;
+    }
+  };
+
   useEffect(() => {
     const fetchBalanceInfo = async () => {
       try {
@@ -88,7 +106,7 @@ export function UserProfile() {
           <div className="flex justify-between">
             <span className="text-gray-500 dark:text-gray-400">注册时间</span>
             <span className="font-medium">
-              {user?.created_at ? new Date(user.created_at * 1000).toLocaleString() : '未知'}
+              {user?.created_at ? new Date(user.created_at).toLocaleString() : '未知'}
             </span>
           </div>
         </div>
@@ -143,15 +161,15 @@ export function UserProfile() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        transaction.type === 'credit' 
+                        transaction.type === 'credit' || transaction.type === 'agent_charge' || transaction.type === 'register'
                           ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' 
                           : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
                       }`}>
-                        {transaction.type === 'credit' ? '充值' : '消费'}
+                        {getTransactionTypeLabel(transaction.type)}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                      {transaction.type === 'credit' ? '+' : ''}{transaction.amount} 点数
+                      {(transaction.type === 'credit' || transaction.type === 'agent_charge' || transaction.type === 'register') ? '+' : ''}{transaction.amount} 点数
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                       {transaction.description || '-'}

@@ -15,9 +15,10 @@ import shutil
 from flask_jwt_extended import JWTManager
 from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from dotenv import load_dotenv
-from api.auth import setup_jwt, login_required, admin_required, get_current_user
+from api.auth import setup_jwt, login_required, admin_required, get_current_user, agent_required, admin_or_agent_required
 from typing import Optional, Dict
 from src.utils.logging_config import LoggingConfig, RequestContext
+from src.balance_system.models.user import ROLE_USER, ROLE_ADMIN, ROLE_AGENT, ROLE_SENIOR_AGENT
 
 # 添加项目根目录到 Python 路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,7 +37,10 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": [
     "http://localhost:3000",  # 本地开发环境
     "http://127.0.0.1:3000",  # 本地开发环境(另一种写法)
-    "http://8.155.13.90:3000"  # 生产环境前端服务器
+    "http://8.155.13.90:3000",  # 生产环境前端服务器
+    "http://117.50.172.107:3000",  # 生产环境前端服务器
+    "http://www.tarote.tech",  # 域名
+    "https://tarote.tech"  # 域名
 ]}})
 
 # 配置 JWT
@@ -223,7 +227,7 @@ def register():
             email=data['email'],
             password_hash=data['password'],  # 实际应用中应该使用加密后的密码
             is_active=True,
-            is_admin=False
+            role=ROLE_USER  # 使用角色常量替代is_admin=False
         )
         
         db_session.add(new_user)
@@ -244,7 +248,9 @@ def register():
                 'username': new_user.username,
                 'email': new_user.email,
                 'is_active': new_user.is_active,
-                'is_admin': new_user.is_admin,
+                'is_admin': new_user.is_admin(),
+                'role': new_user.role,
+                'role_name': new_user.get_role_name(),
                 'balance': float(new_user.balance),
                 'total_charged': float(new_user.total_charged),
                 'total_consumed': float(new_user.total_consumed)
@@ -299,7 +305,9 @@ def login():
                 'username': user.username,
                 'email': user.email,
                 'is_active': user.is_active,
-                'is_admin': user.is_admin,
+                'is_admin': user.is_admin(),
+                'role': user.role,
+                'role_name': user.get_role_name(),
                 'balance': float(user.balance),
                 'total_charged': float(user.total_charged),
                 'total_consumed': float(user.total_consumed)
@@ -424,7 +432,9 @@ def update_account():
                 'username': db_user.username,
                 'email': db_user.email,
                 'is_active': db_user.is_active,
-                'is_admin': db_user.is_admin,
+                'is_admin': db_user.is_admin(),
+                'role': db_user.role,
+                'role_name': db_user.get_role_name(),
                 'balance': float(db_user.balance),
                 'total_charged': float(db_user.total_charged),
                 'total_consumed': float(db_user.total_consumed)
@@ -466,7 +476,7 @@ def get_status():
 @app.route('/api/upload', methods=['POST'])
 @login_required
 def upload_file():
-    """处理文件上传"""
+    """处理文件上传 - 优化版本：使用流式处理和PyAV"""
     if 'file' not in request.files:
         return jsonify({"error": "未找到文件"}), 400
     
@@ -481,31 +491,10 @@ def upload_file():
     
     user_id = user['id']
     username = user['username']
+    
+    # 记录开始时间（用于性能分析）
+    start_time = time.time()
 
-    # 确保引入subprocess模块
-    import subprocess
-    
-    def get_audio_duration(file_path):
-        """使用ffprobe获取音频/视频文件时长(秒)"""
-        # 使用AudioUtils类提供的方法，它对WAV文件和其他格式有不同处理
-        from src.audio.utils import AudioUtils
-        duration = AudioUtils.get_audio_duration(file_path)
-        if duration > 0:
-            return duration
-        
-        logger.warning(f"无法获取文件时长，使用基于文件大小的估算")
-        # 如果获取失败，根据文件大小估算
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        return file_size_mb * 2  # 假设每MB约2秒音频
-    
-    # 保存文件到临时目录
-    filename, file_extension = os.path.splitext(secure_filename(file.filename))
-    file_path = temp_manager.create_named_file(filename, suffix=file_extension)
-    file.save(file_path)
-    
-    # 记录任务信息
-    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    
     # 生成唯一任务ID
     task_id = str(uuid.uuid4())
     
@@ -513,48 +502,146 @@ def upload_file():
     task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
     os.makedirs(task_dir, exist_ok=True)
     
-    # 在上传阶段就提取音频文件
+    # 流式保存文件，直接写入任务目录
+    filename, file_extension = os.path.splitext(secure_filename(file.filename))
+    file_path = os.path.join(task_dir, f"original{file_extension}")
+    
+    logger.info(f"开始流式保存文件: {file.filename} -> {file_path}")
+    
+    # 使用流式处理保存文件，避免内存溢出
+    chunk_size = 4 * 1024 * 1024  # 4MB 块大小
+    file_size = 0
+    with open(file_path, 'wb') as f:
+        while True:
+            chunk = file.read(chunk_size)
+            if not chunk:
+                break
+            f.write(chunk)
+            file_size += len(chunk)
+    
+    file_size_mb = file_size / (1024 * 1024)
+    logger.info(f"文件保存完成: {file_path}, 大小: {file_size_mb:.2f} MB")
+    
+    # 音频提取和处理
     audio_path = None
     audio_duration_seconds = 0
+    
     try:
-        # 根据文件类型处理
+        # 检查是否可以使用PyAV
+        import av
+        use_pyav = True
+        logger.info("使用PyAV处理音频")
+    except ImportError:
+        use_pyav = False
+        logger.info("PyAV不可用，回退到FFmpeg命令行")
+    
+    try:
+        # 音频处理逻辑
         if file_extension.lower() in ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac']:
             # 如果已经是音频文件，直接使用
             audio_path = file_path
             logger.info(f"上传的文件已经是音频: {file.filename}")
         else:
-            # 如果是视频或其他格式，提取音频
+            # 提取音频
             logger.info(f"从上传的文件中提取音频: {file.filename}")
-            audio_processor = AudioProcessorAdapter()
-            audio_path = audio_processor.extract_audio(file_path)
-            if not audio_path:
-                logger.warning(f"无法从文件中提取音频: {file.filename}")
-        
-        # 如果成功提取了音频，保存到持久化目录
-        if audio_path:
-            # 复制提取的音频文件到持久化目录
-            filename, ext = os.path.splitext(os.path.basename(audio_path))
-            persistent_audio_path = os.path.join(task_dir, f"{filename}{ext}")
-            try:
-                logger.info(f"复制音频文件到持久化路径: {audio_path} -> {persistent_audio_path}")
-                shutil.copy2(audio_path, persistent_audio_path)
-                # 更新音频路径为持久化路径
-                audio_path = persistent_audio_path
-            except Exception as e:
-                logger.warning(f"复制音频文件失败: {str(e)}，将继续使用临时路径")
+            audio_path = os.path.join(task_dir, f"audio.wav")
+            
+            if use_pyav:
+                # 使用PyAV提取音频
+                try:
+                    input_container = av.open(file_path)
+                    output_container = av.open(audio_path, 'w')
+                    
+                    # 找到第一个音频流
+                    input_stream = next(s for s in input_container.streams if s.type == 'audio')
+                    
+                    # 创建输出流
+                    output_stream = output_container.add_stream(template=input_stream)
+                    
+                    # 处理帧
+                    for frame in input_container.decode(input_stream):
+                        for packet in output_stream.encode(frame):
+                            output_container.mux(packet)
+                    
+                    # 刷新所有剩余帧
+                    for packet in output_stream.encode(None):
+                        output_container.mux(packet)
+                    
+                    # 关闭容器
+                    output_container.close()
+                    input_container.close()
+                    
+                    if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                        logger.info(f"PyAV 音频提取成功: {audio_path}")
+                    else:
+                        raise RuntimeError("PyAV提取的音频文件为空")
+                        
+                except Exception as e:
+                    logger.warning(f"PyAV提取音频失败，回退到FFmpeg: {str(e)}")
+                    use_pyav = False
+            
+            if not use_pyav:
+                # 回退到使用FFmpeg命令行
+                audio_processor = AudioProcessorAdapter()
+                extracted_path = audio_processor.extract_audio(file_path)
+                if extracted_path:
+                    # 复制到任务目录
+                    shutil.copy2(extracted_path, audio_path)
+                    logger.info(f"FFmpeg音频提取成功: {audio_path}")
+                else:
+                    logger.warning(f"无法从文件中提取音频: {file.filename}")
+                    audio_path = None
     except Exception as e:
         logger.warning(f"音频提取过程中出错: {str(e)}")
+        # 如果提取失败，尝试继续使用原始文件
+        if not audio_path or not os.path.exists(audio_path):
+            audio_path = file_path
     
-    # 获取音频时长
+    # 获取音频时长 - 优先使用PyAV以提高性能
     if audio_path and os.path.exists(audio_path):
-        audio_duration_seconds = get_audio_duration(audio_path)
+        try:
+            if use_pyav:
+                # 使用PyAV获取音频时长
+                with av.open(audio_path) as container:
+                    # 获取音频流
+                    stream = next(s for s in container.streams if s.type == 'audio')
+                    # 计算时长（秒）
+                    if stream.duration and stream.time_base:
+                        audio_duration_seconds = stream.duration * float(stream.time_base)
+                    else:
+                        # 回退：使用总时长除以音频流数量
+                        audio_duration_seconds = container.duration / 1000000.0  # 微秒转秒
+                    
+                    logger.info(f"使用PyAV获取音频时长: {audio_duration_seconds:.2f} 秒")
+            else:
+                # 回退到AudioUtils
+                from src.audio.utils import AudioUtils
+                audio_duration_seconds = AudioUtils.get_audio_duration(audio_path)
+                logger.info(f"使用AudioUtils获取音频时长: {audio_duration_seconds:.2f} 秒")
+                
+            if audio_duration_seconds <= 0:
+                # 如果获取失败，使用基于文件大小的估算
+                logger.warning(f"无法获取准确音频时长，使用基于文件大小的估算")
+                file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+                audio_duration_seconds = file_size_mb * 2  # 假设每MB约2秒音频
+        except Exception as e:
+            logger.warning(f"获取音频时长失败: {str(e)}")
+            # 使用基于文件大小的估算
+            file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+            audio_duration_seconds = file_size_mb * 2
     else:
         # 如果提取失败，尝试直接从原始文件获取时长
-        audio_duration_seconds = get_audio_duration(file_path)
+        try:
+            from src.audio.utils import AudioUtils
+            audio_duration_seconds = AudioUtils.get_audio_duration(file_path)
+        except Exception:
+            # 最终回退：基于文件大小估算
+            audio_duration_seconds = file_size_mb * 2
     
-    # 计算预估费用 - 不同操作可能有不同费用
+    # 计算音频时长（分钟）和预估费用
     audio_duration_minutes = audio_duration_seconds / 60
     estimated_cost = 0
+    
     try:
         from src.balance_system.services.pricing_service import PricingService
         
@@ -563,7 +650,6 @@ def upload_file():
             audio_duration_minutes=audio_duration_minutes
         )
         estimated_cost = analyze_cost["estimated_cost"]
-        
         logger.info(f"已计算预估费用: {estimated_cost}")
     except Exception as e:
         logger.warning(f"计算预估费用失败: {str(e)}")
@@ -573,23 +659,25 @@ def upload_file():
         "id": task_id,
         "filename": file.filename,
         "path": file_path,
-        "original_file": file_path,  # 保存原始文件路径
-        "audio_path": audio_path,    # 保存提取的音频路径
+        "original_file": file_path,
+        "audio_path": audio_path,
         "size_mb": file_size_mb,
-        "audio_duration_seconds": audio_duration_seconds,  # 添加音频时长信息
-        "audio_duration_minutes": audio_duration_minutes,  # 添加音频时长（分钟）
+        "audio_duration_seconds": audio_duration_seconds,
+        "audio_duration_minutes": audio_duration_minutes,
         "status": "uploaded",
         "progress": 0,
         "message": "文件已上传",
-        "created_at": int(time.time()),  # 确保存储为整数时间戳
-        "user_id": user_id,  # 记录用户ID
-        "estimated_cost": estimated_cost  # 记录预估费用
+        "created_at": int(time.time()),
+        "user_id": user_id,
+        "estimated_cost": estimated_cost
     }
     
     # 保存任务信息
     task_manager.set_task(task_id, task_info)
     
-    logger.info(f"文件已上传: {file.filename} ({file_size_mb:.2f} MB, {audio_duration_seconds:.2f} 秒), 任务ID: {task_id}, 用户: {username}")
+    # 计算总处理时间
+    processing_time = time.time() - start_time
+    logger.info(f"文件上传处理完成: {file.filename} ({file_size_mb:.2f} MB, {audio_duration_seconds:.2f} 秒), 任务ID: {task_id}, 用户: {username}, 处理时间: {processing_time:.2f}秒")
     
     # 返回响应，包含预估费用
     return jsonify({
@@ -598,7 +686,8 @@ def upload_file():
         "size_mb": file_size_mb,
         "audio_duration_seconds": audio_duration_seconds,
         "audio_duration_minutes": audio_duration_minutes,
-        "estimated_cost": estimated_cost  # 在响应中包含预估费用
+        "estimated_cost": estimated_cost,
+        "processing_time": processing_time
     })
 
 @app.route('/api/analyze', methods=['POST'])
@@ -753,7 +842,7 @@ def analyze_audio():
 @app.route('/api/split', methods=['POST'])
 @login_required
 def split_audio():
-    """分割音频"""
+    """分割音频"""    
     data = request.json
     task_id = data.get('task_id')
     segments = data.get('segments', [])
@@ -1144,6 +1233,308 @@ def log_request_info(response):
 def start_timer():
     """记录请求开始时间"""
     g.request_start_time = time.time()
+
+@app.route('/api/admin/update-role', methods=['POST'])
+@admin_required
+def update_user_role():
+    """更新用户角色 - 仅限管理员操作"""
+    try:
+        data = request.json
+        
+        # 验证必要字段
+        if 'user_id' not in data or 'role' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': '请提供用户ID和角色值'
+            }), 400
+        
+        user_id = data['user_id']
+        try:
+            role = int(data['role'])
+        except (ValueError, TypeError):
+            return jsonify({
+                'status': 'error',
+                'message': '角色值必须是整数'
+            }), 400
+        
+        # 验证角色值
+        from src.balance_system.models.user import ROLE_USER, ROLE_ADMIN, ROLE_AGENT, ROLE_SENIOR_AGENT
+        valid_roles = [ROLE_USER, ROLE_ADMIN, ROLE_AGENT, ROLE_SENIOR_AGENT]
+        
+        if role not in valid_roles:
+            return jsonify({
+                'status': 'error',
+                'message': f'无效的角色值: {role}'
+            }), 400
+        
+        # 获取当前管理员信息
+        admin = get_current_user()
+        if not admin:
+            return jsonify({
+                'status': 'error',
+                'message': '未找到管理员信息'
+            }), 404
+        
+        from src.balance_system.db import get_db_session
+        from src.balance_system.models.user import User
+        
+        # 检查要修改的用户是否存在
+        with get_db_session() as session:
+            user = session.query(User).filter_by(id=user_id).first()
+            
+            if not user:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'用户 {user_id} 不存在'
+                }), 404
+            
+            # 更新用户角色
+            old_role = user.role
+            user.role = role
+            session.commit()
+            
+            logger.info(f"管理员 {admin['username']} 将用户 {user.username} 的角色从 {old_role} 更新为 {role}")
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'已将用户 {user.username} 的角色更新为 {user.get_role_name()}',
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'role': user.role,
+                    'role_name': user.get_role_name(),
+                    'is_admin': user.is_admin()
+                }
+            })
+    except Exception as e:
+        logger.exception(f"更新用户角色时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'更新用户角色失败: {str(e)}'
+        }), 500
+
+@app.route('/api/admin/find-user', methods=['POST'])
+@admin_or_agent_required
+def find_user():
+    """通过邮箱查找用户 - 仅限管理员或代理操作"""
+    try:
+        data = request.json
+        
+        # 验证必要字段
+        if 'email' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': '请提供用户邮箱'
+            }), 400
+        
+        email = data['email'].strip()
+        
+        # 获取当前管理员/代理信息
+        admin = get_current_user()
+        if not admin:
+            return jsonify({
+                'status': 'error',
+                'message': '未找到管理员/代理信息'
+            }), 404
+        
+        from src.balance_system.db import get_db_session
+        from src.balance_system.models.user import User
+        
+        # 查找用户
+        with get_db_session() as session:
+            user = session.query(User).filter_by(email=email).first()
+            
+            if not user:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'未找到邮箱为 {email} 的用户'
+                }), 404
+            
+            logger.info(f"{admin['username']} 查询了用户 {user.username} 的信息")
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'已找到用户',
+                'data': {
+                    'user': {
+                        'id': user.id,
+                        'username': user.username,
+                        'email': user.email,
+                        'role': user.role,
+                        'role_name': user.get_role_name(),
+                        'is_admin': user.is_admin(),
+                        'balance': float(user.balance) if user.balance else 0.0
+                    }
+                }
+            })
+    except Exception as e:
+        logger.exception(f"查找用户时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'查找用户失败: {str(e)}'
+        }), 500
+
+@app.route('/api/balance/agent/charge', methods=['POST'])
+@agent_required
+def agent_charge():
+    """代理为普通用户充值（划扣）- 仅限代理操作"""
+    try:
+        data = request.json
+        
+        # 验证必要字段
+        if 'email' not in data or 'amount' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': '请提供用户邮箱和充值金额'
+            }), 400
+        
+        email = data['email'].strip()
+        
+        try:
+            amount = float(data['amount'])
+            if amount <= 0:
+                return jsonify({
+                    'status': 'error',
+                    'message': '充值金额必须大于0'
+                }), 400
+        except (ValueError, TypeError):
+            return jsonify({
+                'status': 'error',
+                'message': '无效的充值金额'
+            }), 400
+        
+        # 获取当前代理信息
+        agent = get_current_user()
+        if not agent:
+            return jsonify({
+                'status': 'error',
+                'message': '未找到代理信息'
+            }), 404
+        
+        agent_id = agent['id']
+        
+        from src.balance_system.db import get_db_session
+        from src.balance_system.models.user import User
+        from src.balance_system.services.balance_service import BalanceService
+        
+        # 检查代理余额是否足够
+        with get_db_session() as session:
+            agent_user = session.query(User).filter_by(id=agent_id).first()
+            
+            if not agent_user:
+                return jsonify({
+                    'status': 'error',
+                    'message': '代理账户不存在'
+                }), 404
+            
+            if float(agent_user.balance) < amount:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'代理余额不足，当前余额: {float(agent_user.balance)} 点'
+                }), 400
+            
+            # 查找目标用户
+            target_user = session.query(User).filter_by(email=email).first()
+            
+            if not target_user:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'未找到邮箱为 {email} 的用户'
+                }), 404
+            
+            # 检查目标用户不是代理或管理员
+            if target_user.role > 0:  # 非普通用户
+                return jsonify({
+                    'status': 'error',
+                    'message': f'不能给其他代理或管理员充值'
+                }), 400
+            
+            # 执行划扣操作：从代理账户扣除，加到用户账户
+            # 1. 从代理账户扣除
+            agent_user.balance = float(agent_user.balance) - amount
+            agent_user.total_consumed = float(agent_user.total_consumed) + amount
+            
+            # 2. 给用户账户充值
+            target_user.balance = float(target_user.balance) + amount
+            target_user.total_charged = float(target_user.total_charged) + amount
+            
+            # 保存更改
+            session.commit()
+            
+            # 记录交易历史
+            BalanceService.record_agent_charge(agent_id, target_user.id, amount)
+            
+            logger.info(f"代理 {agent['username']} 为用户 {target_user.username} 充值 {amount} 点")
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'成功为用户 {target_user.username} 充值 {amount} 点',
+                'data': {
+                    'agent_balance': float(agent_user.balance),
+                    'user_balance': float(target_user.balance),
+                    'amount': amount
+                }
+            })
+    except Exception as e:
+        logger.exception(f"代理充值时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'充值失败: {str(e)}'
+        }), 500
+
+@app.route('/api/admin/special-users', methods=['GET'])
+@admin_required
+def get_special_users():
+    """获取所有特殊用户（非普通用户）- 仅限管理员访问"""
+    try:
+        # 获取当前管理员信息
+        admin = get_current_user()
+        if not admin:
+            return jsonify({
+                'status': 'error',
+                'message': '未找到管理员信息'
+            }), 404
+        
+        from src.balance_system.db import get_db_session
+        from src.balance_system.models.user import User, ROLE_USER
+        
+        # 查询所有特殊用户
+        with get_db_session() as session:
+            # 查询除了当前用户外的所有非普通用户
+            special_users = session.query(User).filter(
+                User.role > ROLE_USER
+            ).order_by(User.role.desc()).all()
+            
+            users_data = []
+            for user in special_users:
+                users_data.append({
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'role': user.role,
+                    'role_name': user.get_role_name(),
+                    'balance': float(user.balance) if user.balance else 0.0,
+                    'total_charged': float(user.total_charged) if user.total_charged else 0.0,
+                    'total_consumed': float(user.total_consumed) if user.total_consumed else 0.0,
+                    'created_at': user.created_at.isoformat() if user.created_at else None
+                })
+            
+            logger.info(f"管理员 {admin['username']} 查询了特殊用户列表，共 {len(users_data)} 人")
+            
+            return jsonify({
+                'status': 'success',
+                'message': '获取特殊用户列表成功',
+                'data': {
+                    'users': users_data
+                }
+            })
+    except Exception as e:
+        logger.exception(f"获取特殊用户列表失败: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'获取特殊用户列表失败: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     # 启动API服务

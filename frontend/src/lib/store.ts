@@ -269,7 +269,9 @@ export const useAppStore = create<AppState>()(
                 ...state.auth,
                 user: {
                   ...state.auth.user,
-                  is_admin: true
+                  is_admin: true,
+                  role: 1,  // ROLE_ADMIN
+                  role_name: "管理员"
                 }
               }
             };

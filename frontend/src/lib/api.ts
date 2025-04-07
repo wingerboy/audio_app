@@ -103,12 +103,13 @@ export interface User {
   id: string;
   username: string;
   email: string;
-  created_at: number;
-  last_login: number | null;
+  is_admin: boolean; // 为了向后兼容保留
+  role: number; // 新增：角色ID
+  role_name: string; // 新增：角色名称
   balance: number;
   total_charged: number;
   total_consumed: number;
-  is_admin?: boolean; // 添加管理员标识
+  created_at: string;
 }
 
 export interface AuthResponse {
@@ -163,6 +164,13 @@ export interface BalanceCheckResult {
     model_size: string;
   };
   task_id?: string;
+}
+
+// 添加ApiResponse接口定义
+export interface ApiResponse<T = any> {
+  status: string;
+  message: string;
+  data?: T;
 }
 
 // 获取所有模型的定价信息
@@ -391,6 +399,15 @@ export const apiService = {
     return response.data;
   },
 
+  // 代理划扣接口 - 将点数从代理账户划扣到普通用户账户
+  agentCharge: async (email: string, amount: number): Promise<ApiResponse<{agent_balance: number, user_balance: number, amount: number}>> => {
+    const response = await api.post('/balance/agent/charge', {
+      email: email,
+      amount: amount
+    });
+    return response.data;
+  },
+
   // 获取余额信息
   getBalanceInfo: async (): Promise<any> => {
     const response = await api.get('/balance/info');
@@ -400,7 +417,7 @@ export const apiService = {
   // 获取当前用户的最后一个任务
   getUserLastTask: async (): Promise<TaskStatus | null> => {
     try {
-      const response = await api.get('/api/user/last-task');
+      const response = await api.get('/user/last-task');
       return response.data;
     } catch (error) {
       console.error('获取用户最后一个任务失败', error);
@@ -413,6 +430,29 @@ export const apiService = {
     const response = await api.get(`/download/${taskId}/zip`, { responseType: 'blob' });
     const blob = new Blob([response.data], { type: 'application/zip' });
     return URL.createObjectURL(blob);
+  },
+
+  // 更新用户角色 - 仅限管理员操作
+  updateUserRole: async (userId: string, role: number): Promise<ApiResponse<{user: User}>> => {
+    const response = await api.post('/admin/update-role', {
+      user_id: userId,
+      role
+    });
+    return response.data;
+  },
+
+  // 获取特殊用户列表 - 仅限管理员操作
+  getSpecialUsers: async (): Promise<ApiResponse<{users: User[]}>> => {
+    const response = await api.get('/admin/special-users');
+    return response.data;
+  },
+
+  // 通过邮箱查找用户 - 仅限管理员操作
+  findUserByEmail: async (email: string): Promise<ApiResponse<{user: User}>> => {
+    const response = await api.post('/admin/find-user', {
+      email
+    });
+    return response.data;
   },
 };
 

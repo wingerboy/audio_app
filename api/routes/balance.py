@@ -4,7 +4,7 @@ from flask_jwt_extended import get_jwt, get_jwt_identity
 from src.balance_system.services.balance_service import BalanceService
 from src.balance_system.services.pricing_service import PricingService
 from functools import wraps
-from api.auth import admin_required, login_required, get_current_user
+from api.auth import admin_required, login_required, get_current_user, admin_or_agent_required
 from src.balance_system.services.user_service import UserService
 import os
 import uuid
@@ -99,7 +99,7 @@ def get_balance_info():
             'transactions': [{
                 'id': str(trans['id']),
                 'amount': trans['amount'],
-                'type': 'credit' if trans['transaction_type'] in ['charge', 'register', 'gift'] else 'debit',
+                'type': trans['transaction_type'],
                 'created_at': int(datetime.fromisoformat(trans['created_at']).timestamp()),
                 'description': trans['description'] or ''
             } for trans in transactions]
@@ -244,10 +244,9 @@ def calculate_price():
         }), 500
 
 @bp.route('/admin/charge', methods=['POST'])
-@login_required
-@admin_required
-def admin_charge_balance():
-    """管理员对用户账户充值"""
+@admin_or_agent_required
+def admin_charge():
+    """管理员充值（现在也允许代理）"""
     try:
         data = request.json
         
