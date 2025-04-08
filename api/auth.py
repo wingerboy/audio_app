@@ -86,17 +86,17 @@ def admin_required(func):
             user_id = get_jwt_identity()
             
             # 检查用户是否为管理员
-            # with get_db_session() as session:
-            #     user = session.query(User).filter_by(id=user_id).first()
-            user = db_session.query(User).filter(User.id == user_id).first()
+            with get_db_session() as session:
+                user = session.query(User).filter_by(id=user_id).first()
+            # user = db_session.query(User).filter(User.id == user_id).first()
 
-            if not user or not user.is_admin():
-                logger.warning(f"用户 {user_id} 尝试访问管理员资源但无权限")
-                return jsonify({
-                    'status': 'error',
-                    'message': '需要管理员权限',
-                    'code': 'admin_required'
-                }), 403
+                if not user or not user.is_admin():
+                    logger.warning(f"用户 {user_id} 尝试访问管理员资源但无权限")
+                    return jsonify({
+                        'status': 'error',
+                        'message': '需要管理员权限',
+                        'code': 'admin_required'
+                    }), 403
                 
             return func(*args, **kwargs)
         except Exception as e:
@@ -132,25 +132,25 @@ def get_current_user():
         user_id = get_jwt_identity()
         
         # 获取用户信息
-        # with get_db_session() as session:
-        #     user = session.query(User).filter_by(id=user_id).first()
-        user = db_session.query(User).filter(User.id == user_id).first()
-        if not user:
-            return None
+        with get_db_session() as session:
+            user = session.query(User).filter_by(id=user_id).first()
+        # user = db_session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return None
 
-        # 返回用户信息字典而不是ORM对象
-        return {
-            'id': user.id,
-            'username': user.username,
-            'email': user.email,
-            'is_admin': user.is_admin(),
-            'role': user.role,
-            'role_name': user.get_role_name(),
-            'balance': float(user.balance) if user.balance else 0.0,
-            'total_charged': float(user.total_charged) if user.total_charged else 0.0,
-            'total_consumed': float(user.total_consumed) if user.total_consumed else 0.0,
-            'created_at': user.created_at.isoformat() if user.created_at else None
-        }
+            # 返回用户信息字典而不是ORM对象
+            return {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'is_admin': user.is_admin(),
+                'role': user.role,
+                'role_name': user.get_role_name(),
+                'balance': float(user.balance) if user.balance else 0.0,
+                'total_charged': float(user.total_charged) if user.total_charged else 0.0,
+                'total_consumed': float(user.total_consumed) if user.total_consumed else 0.0,
+                'created_at': user.created_at.isoformat() if user.created_at else None
+            }
     except Exception as e:
         logger.warning(f"获取当前用户失败: {str(e)}")
         return None

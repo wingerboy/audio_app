@@ -3,6 +3,7 @@ import datetime
 from sqlalchemy import Column, String, Numeric, Boolean, Text, DateTime, Integer, func, TIMESTAMP, text, ForeignKey, \
     Float
 from ..db import Base
+import json
 
 class UserTask(Base):
     __tablename__ = 'user_tasks'
@@ -16,6 +17,10 @@ class UserTask(Base):
     source_file_duration_minutes = Column(Float, default=0, nullable=False)
     source_file_duration_seconds = Column(Float, default=0, nullable=False)
     transaction_id = Column(Integer, ForeignKey('transaction_records.id'))
+    audio_path = Column(String(255), default='', nullable=True)
+    segments = Column(Text, default='', nullable=True)
+    output_files = Column(Text, default='', nullable=True)
+    output_dir = Column(String(255), default='', nullable=True)
     create_time = Column(TIMESTAMP, server_default=func.now())
     update_time = Column(TIMESTAMP, server_default=func.now())
 
@@ -41,7 +46,7 @@ class UserTask(Base):
         # }
         print("self.create_time.timestamp() is ", self.create_time.timestamp())
 
-        return {
+        result = {
             'id': self.task_no,
             'filename': self.source_file_name,
             'path': self.source_file_path,
@@ -51,10 +56,17 @@ class UserTask(Base):
             'audio_duration_minutes': self.source_file_duration_minutes,
             'audio_duration_seconds': self.source_file_duration_seconds,
             'transaction_id': int(self.transaction_id),
+            'audio_path': self.audio_path,
+            'segments': json.loads(self.segments) if self.segments else None,
+            'output_files': json.loads(self.output_files) if self.output_files else None,
+            'output_dir': self.output_dir,
             'create_time': self.create_time if self.create_time else None,
             'created_at': self.create_time.timestamp() if self.create_time else None,
             'update_time': self.update_time.timestamp() if self.update_time else None,
         }
+
+        result['transcription'] = {'segments': result['segments']}
+        return result
 
     def getTaskStatus(self, status: int):
         if (status == 0):

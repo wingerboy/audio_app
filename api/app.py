@@ -112,7 +112,7 @@ class TaskManager:
         from src.balance_system.db import db_session
         from src.balance_system.models.user_task import UserTask
         task = self._tasks.get(task_id)
-        if task is None:
+        if task is None or ("size_mb" not in task):
             task = db_session.query(UserTask).filter(UserTask.task_no == task_id).first()
             if task:
                 task = task.to_dict()
@@ -135,11 +135,21 @@ class TaskManager:
         from src.balance_system.db import db_session
 
         # 保存task信息
-        user_task = UserTask(task_no=task_data.get("id"), source_file_name=task_data.get("filename"), source_file_path=task_data.get("path"), user_id=task_data.get("user_id"),
-                             status=self.getTaskStatus(task_data.get("status")), source_file_size=round(task_data.get("size_mb"), 2), source_file_duration_minutes=round(task_data.get("audio_duration_minutes"), 2), source_file_duration_seconds=round(task_data.get("audio_duration_seconds"), 2),
-                             transaction_id=0)
-                             # transaction_id=0, create_time=task_data.get("created_at"), update_time=task_data.get("created_at"))
-        db_session.add(user_task)
+        if task_data.get("status") == "uploaded":
+            user_task = UserTask(task_no=task_data.get("id"), source_file_name=task_data.get("filename"), source_file_path=task_data.get("path"), user_id=task_data.get("user_id"),
+                                 status=self.getTaskStatus(task_data.get("status")), source_file_size=round(task_data.get("size_mb"), 2), source_file_duration_minutes=round(task_data.get("audio_duration_minutes"), 2), source_file_duration_seconds=round(task_data.get("audio_duration_seconds"), 2),
+                                 transaction_id=0,audio_path=task_data.get("audio_path"))
+                                 # transaction_id=0, create_time=task_data.get("created_at"), update_time=task_data.get("created_at"))
+            db_session.add(user_task)
+        elif task_data.get("status") == "analyzed":
+            db_session.query(UserTask).filter(UserTask.task_no == task_id).update({"status": self.getTaskStatus(task_data.get("status")), "segments": json.dumps(task_data.get("segments")), "update_time": task_data.get("update_time")})
+        elif task_data.get("status") == "completed":
+            db_session.query(UserTask).filter(UserTask.task_no == task_id).update({"status": self.getTaskStatus(task_data.get("status")), "segments": json.dumps(task_data.get("segments")),
+                                                                   "output_files": json.dumps(task_data.get("output_files")),
+                                                                   "output_dir": task_data.get("output_dir"),
+                                                                   "update_time": task_data.get("update_time")})
+        else:
+            db_session.query(UserTask).filter(UserTask.task_no == task_id).update({"status": self.getTaskStatus(task_data.get("status")), "update_time": task_data.get("update_time")})
 
         # 保存更新
         db_session.commit()
@@ -804,6 +814,14 @@ def analyze_audio():
     task["message"] = "开始处理..."
     task["model_size"] = model_size  # 记录使用的模型大小
 
+    # 保存任务信息
+    task_info = {
+        "id": task_id,
+        "status": "processing",
+        "update_time": time.strftime("%Y-%m-%d %X")
+    }
+    task_manager.set_task(task_id, task_info)
+
     try:
         # 创建进度回调
         progress_callback = get_progress_callback(task_id)
@@ -819,6 +837,14 @@ def analyze_audio():
             if not audio_path:
                 task["status"] = "failed"
                 task["message"] = "音频提取失败"
+
+                # 保存任务信息
+                task_info = {
+                    "id": task_id,
+                    "status": "failed",
+                    "update_time": time.strftime("%Y-%m-%d %X")
+                }
+                task_manager.set_task(task_id, task_info)
                 return jsonify({"error": "音频提取失败"}), 500
 
             # 创建任务专用的持久化目录
@@ -883,8 +909,18 @@ def analyze_audio():
             )
 
             logger.info(f"成功扣除用户 {user_id} 余额: {estimated_cost} 点")
+
         except Exception as e:
-            logger.error(f"扣除用户余额失败: {str(e)}")
+            logger.error(f"扣除用户余额失败: {str(e)}")#扣0元？
+
+        # 保存任务信息
+        task_info = {
+            "id": task_id,
+            "segments": transcription.get("segments", []),
+            "status": "analyzed",
+            "update_time": time.strftime("%Y-%m-%d %X")
+        }
+        task_manager.set_task(task_id, task_info)
 
         # 返回结果
         return jsonify({
@@ -911,7 +947,12 @@ def split_audio():
     output_format = data.get('output_format', 'mp3')
     output_quality = data.get('output_quality', 'medium')
 
-    if not task_id or task_id not in task_manager.get_all_tasks():
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "未找到用户信息"}), 404
+
+    user_id = user['id']
+    if not task_id or task_id not in task_manager.get_all_tasks(user_id):
         return jsonify({"error": "无效的任务ID"}), 400
 
     task = task_manager.get_task(task_id)
@@ -921,7 +962,7 @@ def split_audio():
     audio_path = task["audio_path"]
 
     # 设置任务上下文
-    user_id = task.get("user_id")
+    # user_id = task.get("user_id")
     RequestContext.set_context(user_id=user_id, task_id=task_id, operation="split_audio")
     logger.info(f"开始分割音频任务: {task_id}, 分段数: {len(segments)}")
 
@@ -931,6 +972,14 @@ def split_audio():
     task["status"] = "splitting"
     task["progress"] = 0
     task["message"] = "开始分割音频..."
+
+    # 保存任务信息
+    task_info = {
+        "id": task_id,
+        "status": "splitting",
+        "update_time": time.strftime("%Y-%m-%d %X")
+    }
+    task_manager.set_task(task_id, task_info)
 
     try:
         # 创建进度回调
@@ -1034,6 +1083,17 @@ def split_audio():
             })
 
         task["files_info"] = files_info
+
+        # 保存任务信息
+        task_info = {
+            "id": task_id,
+            "status": "completed",
+            "segments": segments,
+            "output_files": output_files,
+            "output_dir": output_dir,
+            "update_time": time.strftime("%Y-%m-%d %X")
+        }
+        task_manager.set_task(task_id, task_info)
 
         # 返回结果
         return jsonify({
@@ -1601,5 +1661,5 @@ def get_special_users():
 if __name__ == '__main__':
     # 启动API服务
     port = int(os.getenv('PORT', 5002))
-    app.run(host='0.0.0.0', port=port, debug=True)
-    # app.run(host='0.0.0.0', port=port, debug=False)
+    # app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
