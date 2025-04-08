@@ -32,6 +32,9 @@ class AudioProcessorAdapter:
         # 初始化临时文件管理器
         self.temp_manager = TempFileManager(prefix="audio_processor_")
         
+        # 初始化重要文件列表，防止被自动清理
+        self.important_files = []
+        
         # 创建音频转换器
         self.converter = AudioConverter()
         
@@ -50,21 +53,33 @@ class AudioProcessorAdapter:
         self.chunk_size_mb = chunk_size_mb
         self.auto_cleanup = auto_cleanup
         
-        # 检查是否可使用PyAV
-        try:
-            import av
-            self.pyav_available = True
-            self.logger.info(f"检测到PyAV库 (版本: {av.__version__})，将优先使用PyAV处理音频")
-        except ImportError:
-            self.pyav_available = False
-            self.logger.warning("未检测到PyAV库，将使用FFmpeg处理音频")
-        
         self.logger.info(f"初始化AudioProcessorAdapter: 硬盘处理={use_disk_processing}, 分块大小={chunk_size_mb}MB, 最大线程数={self.max_workers}, 自动清理={auto_cleanup}, CPU核心数={os.cpu_count()}")
     
     @property
     def temp_dir(self):
         """获取临时目录路径"""
         return self.temp_manager.base_dir
+    
+    def protect_file(self, file_path):
+        """将文件添加到保护列表，防止被清理"""
+        if not os.path.exists(file_path):
+            self.logger.warning(f"尝试保护不存在的文件: {file_path}")
+            return False
+            
+        # 确保important_files属性存在
+        if not hasattr(self, 'important_files'):
+            self.important_files = []
+            
+        # 添加到important_files列表
+        if file_path not in self.important_files:
+            self.important_files.append(file_path)
+            self.logger.info(f"添加到internal保护列表: {file_path}")
+            
+        # 同时添加到TempFileManager的保护列表
+        self.temp_manager.protect_file(file_path)
+        self.logger.info(f"添加到TempFileManager保护列表: {file_path}")
+        
+        return True
     
     def extract_audio(self, file_path, progress_callback=None):
         """
@@ -95,13 +110,17 @@ class AudioProcessorAdapter:
                 temp_manager=self.temp_manager
             )
             
+            # 确保important_files属性存在
+            if not hasattr(self, 'important_files'):
+                self.important_files = []
+                
             # 将提取的文件添加到不清理列表
-            if hasattr(self, 'important_files'):
+            if output_audio_path and output_audio_path not in self.important_files:
                 self.important_files.append(output_audio_path)
-            else:
-                self.important_files = [output_audio_path]
-            
-            self.logger.info(f"添加到保护列表，防止被清理: {output_audio_path}")
+                self.logger.info(f"添加到保护列表，防止被清理: {output_audio_path}")
+                
+                # 同时添加到TempFileManager的保护列表
+                self.temp_manager.protect_file(output_audio_path)
             
             # 更新进度
             if progress_callback:
@@ -133,9 +152,30 @@ class AudioProcessorAdapter:
         if not os.path.exists(audio_path):
             error_msg = f"音频文件不存在: {audio_path}"
             self.logger.error(error_msg)
-            if progress_callback:
-                progress_callback(error_msg, 0)
-            return []
+            
+            # 如果原始路径不存在，尝试检查是否存在于其他可能的位置
+            possible_paths = [
+                os.path.join(self.temp_dir, "original_extracted.wav"),
+                os.path.join(os.path.dirname(audio_path), "original_extracted.wav"),
+                # 添加更多可能的路径
+                os.path.join(os.path.dirname(os.path.dirname(audio_path)), "original_extracted.wav"),
+                os.path.join(tempfile.gettempdir(), "original_extracted.wav")
+            ]
+            
+            for possible_path in possible_paths:
+                if os.path.exists(possible_path):
+                    self.logger.info(f"找到可能的替代音频文件: {possible_path}")
+                    audio_path = possible_path
+                    break
+            
+            # 如果仍然找不到文件，返回错误
+            if not os.path.exists(audio_path):
+                if progress_callback:
+                    progress_callback(error_msg, 0)
+                return []
+        
+        # 将音频文件添加到重要文件列表，防止被清理
+        self.protect_file(audio_path)
         
         if not os.path.exists(output_dir):
             try:
@@ -260,24 +300,10 @@ class AudioProcessorAdapter:
         try:
             self.logger.info("开始清理临时文件...")
             
-            # 如果有重要文件需要保留
-            if hasattr(self, 'important_files') and self.important_files:
-                self.logger.info(f"保留{len(self.important_files)}个重要文件，不进行清理: {self.important_files}")
-                
-                # 获取当前所有临时文件
-                files_to_clean = list(self.temp_manager.temp_files)
-                
-                # 排除标记为重要的文件
-                for file_path in files_to_clean:
-                    if file_path not in self.important_files:
-                        self.temp_manager.remove_file(file_path)
-                        self.logger.debug(f"清理非重要临时文件: {file_path}")
-                    else:
-                        self.logger.info(f"保留重要文件: {file_path}")
-            else:
-                # 没有重要文件，正常清理
-                self.temp_manager.cleanup()
-                self.logger.info("临时文件清理完成")
+            # 对于TempFileManager管理的文件，使用其清理机制
+            self.temp_manager.cleanup()
+            
+            self.logger.info("临时文件清理完成，保留了重要文件")
         except Exception as e:
             self.logger.error(f"清理临时文件时出错: {str(e)}")
     

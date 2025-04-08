@@ -55,16 +55,6 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
           setCurrentStep(STEPS.SEGMENTS);
         } else if (taskDetails.status === 'completed') {
           setCurrentStep(STEPS.DOWNLOAD);
-        } else if (taskDetails.status === 'failed') {
-          // 如果任务失败，将用户导航到失败发生的步骤
-          const failedAtStep = taskDetails.failedAtStep || taskDetails.lastSuccessfulStep;
-          if (failedAtStep === 'uploaded') {
-            setCurrentStep(STEPS.ANALYZE); // 引导用户重新分析
-          } else if (failedAtStep === 'analyzed') {
-            setCurrentStep(STEPS.SEGMENTS); // 引导用户重新分割
-          } else {
-            setCurrentStep(STEPS.DOWNLOAD); // 默认引导到下载页面
-          }
         }
         
       } catch (error) {
@@ -122,50 +112,12 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
   
   // 步骤导航
   const renderStepNavigation = () => {
-    interface StepItem {
-      id: number;
-      name: string;
-      requiredStatus: string | null;
-    }
-    
-    const steps: StepItem[] = [
-      { id: 1, name: '上传文件', requiredStatus: null },
-      { id: 2, name: '分析内容', requiredStatus: 'uploaded' },
-      { id: 3, name: '分割音频', requiredStatus: 'analyzed' },
-      { id: 4, name: '下载文件', requiredStatus: 'completed' },
+    const steps = [
+      { id: 1, name: '上传文件' },
+      { id: 2, name: '分析内容' },
+      { id: 3, name: '分割音频' },
+      { id: 4, name: '下载文件' },
     ];
-    
-    // 状态进度映射
-    const statusProgress: Record<string, number> = {
-      'uploaded': 1,
-      'processing': 2,
-      'analyzed': 3,
-      'splitting': 4,
-      'completed': 5,
-      'failed': -1 // 失败状态特殊处理
-    };
-    
-    // 判断步骤是否可访问
-    const isStepAccessible = (step: StepItem): boolean => {
-      // 如果未指定需要的状态，总是可访问
-      if (!step.requiredStatus) return true;
-      
-      // 如果当前任务状态满足或超过所需状态，则可访问
-      if (!currentTask) return false;
-      
-      // 如果是失败状态，检查失败时的最后状态
-      if (currentTask.status === 'failed') {
-        // 从失败消息中推断最后状态
-        const failedAtStep = currentTask.failedAtStep || currentTask.lastSuccessfulStep;
-        if (failedAtStep && statusProgress[failedAtStep] !== undefined) {
-          // 失败的步骤之前的步骤都可访问
-          return statusProgress[step.requiredStatus] <= statusProgress[failedAtStep];
-        }
-        return statusProgress[step.requiredStatus] <= 1; // 最少可以访问上传步骤
-      }
-      
-      return statusProgress[currentTask.status] >= statusProgress[step.requiredStatus];
-    };
     
     return (
       <div className="mb-8">
@@ -174,25 +126,28 @@ export default function TaskDetailPage({ params }: { params: { taskId: string } 
             <button
               key={step.id}
               onClick={() => {
-                // 只允许导航到可访问的步骤
-                if (isStepAccessible(step)) {
+                // 只允许向后导航，或者在任务完成后导航到下载页面
+                if (
+                  step.id <= uiState.currentStep || 
+                  (step.id === 4 && currentTask?.status === 'completed')
+                ) {
                   setCurrentStep(step.id);
                 }
               }}
               className={`flex flex-col items-center ${
                 step.id === uiState.currentStep
                   ? 'text-primary-600 dark:text-primary-400 font-medium'
-                  : isStepAccessible(step)
+                  : step.id < uiState.currentStep || (step.id === 4 && currentTask?.status === 'completed')
                   ? 'text-gray-700 dark:text-gray-300 cursor-pointer hover:text-primary-500 dark:hover:text-primary-400'
                   : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
               }`}
-              disabled={!isStepAccessible(step)}
+              disabled={step.id > uiState.currentStep && !(step.id === 4 && currentTask?.status === 'completed')}
             >
               <span
                 className={`w-10 h-10 flex items-center justify-center rounded-full mb-2 ${
                   step.id === uiState.currentStep
                     ? 'bg-primary-600 dark:bg-primary-700 text-white'
-                    : isStepAccessible(step)
+                    : step.id < uiState.currentStep || (step.id === 4 && currentTask?.status === 'completed')
                     ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                     : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600'
                 }`}

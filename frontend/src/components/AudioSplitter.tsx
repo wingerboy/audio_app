@@ -40,9 +40,7 @@ export function AudioSplitter() {
   // 处理音频分割
   const handleSplit = async () => {
     // 如果没有选择分段，使用全部分段
-    const segmentsToSplit = selectedSegments.length > 0 
-      ? selectedSegments 
-      : currentTask?.selectedSegmentsForRetry || segments;
+    const segmentsToSplit = selectedSegments.length > 0 ? selectedSegments : segments;
     
     if (segmentsToSplit.length === 0) {
       setError('请至少选择一个分段');
@@ -78,23 +76,9 @@ export function AudioSplitter() {
         setCurrentStep(4);
       }, 1000);
       
-    } catch (error: any) {
+    } catch (error) {
       console.error('分割失败:', error);
       setError('音频分割失败，请重试。');
-      
-      // 保存失败状态和分段选择，以便重试
-      if (currentTask) {
-        const updatedTask = {
-          ...currentTask,
-          status: 'failed',
-          message: '分割失败',
-          failedAtStep: 'analyzed',
-          lastSuccessfulStep: 'analyzed',
-          selectedSegmentsForRetry: segmentsToSplit,
-          errorDetails: error.message || '音频分割失败'
-        };
-        useAppStore.getState().setCurrentTask(updatedTask);
-      }
     } finally {
       setIsSplitting(false);
     }
@@ -161,19 +145,6 @@ export function AudioSplitter() {
         {error && (
           <div className="p-3 bg-red-50 text-red-700 rounded">
             {error}
-          </div>
-        )}
-        
-        {/* 重试按钮 - 仅在任务失败时显示 */}
-        {currentTask?.status === 'failed' && currentTask?.lastSuccessfulStep === 'analyzed' && (
-          <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-            <p className="text-yellow-700 mb-2">上次分割失败，您可以重试。</p>
-            <button
-              onClick={handleSplit}
-              className="bg-yellow-500 hover:bg-yellow-600 text-white font-medium py-2 px-4 rounded-md"
-            >
-              重试分割
-            </button>
           </div>
         )}
         

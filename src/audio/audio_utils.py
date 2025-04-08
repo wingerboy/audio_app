@@ -6,25 +6,30 @@ import re
 import subprocess
 import logging
 import tempfile
+import wave
+import contextlib
 from typing import Dict, Any, Optional, Union
-from pydub import AudioSegment
+from pathlib import Path
+
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
 
 class AudioUtils:
     """音频处理工具类"""
     
+    logger = logging.getLogger(__name__)
+    
     @staticmethod
-    def load_audio(audio_path: str) -> AudioSegment:
-        """
-        加载音频文件
-        
-        Args:
-            audio_path: 音频文件路径
+    def load_audio(audio_path: str) -> Any:
+        """加载音频文件"""
+        if not PYDUB_AVAILABLE:
+            AudioUtils.logger.error("未安装pydub库，无法加载音频")
+            raise RuntimeError("未安装pydub库，无法加载音频")
             
-        Returns:
-            AudioSegment对象
-        """
-        logger = logging.getLogger(__name__)
-        logger.info(f"加载音频文件: {audio_path}")
+        AudioUtils.logger.info(f"加载音频文件: {audio_path}")
         
         # 获取文件扩展名
         _, ext = os.path.splitext(audio_path)
@@ -33,95 +38,184 @@ class AudioUtils:
         # 加载音频
         if not format or format not in ['mp3', 'wav', 'ogg', 'flac', 'm4a']:
             # 如果扩展名不支持，默认使用WAV格式
-            logger.warning(f"未识别的音频格式: {format}，尝试作为WAV加载")
+            AudioUtils.logger.warning(f"未识别的音频格式: {format}，尝试作为WAV加载")
             format = 'wav'
         
         try:
             audio = AudioSegment.from_file(audio_path, format=format)
-            logger.info(f"成功加载音频: {len(audio)/1000:.2f}秒, {audio.channels}声道, {audio.frame_rate}Hz")
+            AudioUtils.logger.info(f"成功加载音频: {len(audio)/1000:.2f}秒, {audio.channels}声道, {audio.frame_rate}Hz")
             return audio
         except Exception as e:
-            logger.exception(f"加载音频失败: {str(e)}")
+            AudioUtils.logger.exception(f"加载音频失败: {str(e)}")
             # 尝试直接加载，让pydub自动检测格式
             try:
                 audio = AudioSegment.from_file(audio_path)
-                logger.info(f"使用自动检测成功加载音频: {len(audio)/1000:.2f}秒")
+                AudioUtils.logger.info(f"使用自动检测成功加载音频: {len(audio)/1000:.2f}秒")
                 return audio
             except Exception as e2:
-                logger.exception(f"使用自动检测加载音频也失败: {str(e2)}")
+                AudioUtils.logger.exception(f"使用自动检测加载音频也失败: {str(e2)}")
                 raise RuntimeError(f"无法加载音频文件: {audio_path}") from e2
     
     @staticmethod
-    def get_audio_info(audio_path: str) -> Dict[str, Any]:
-        """
-        获取音频文件信息
+    def get_audio_duration(audio_path: str) -> float:
+        """获取音频文件的时长（秒）"""
+        AudioUtils.logger.info(f"获取音频时长: {audio_path}")
         
-        Args:
-            audio_path: 音频文件路径
+        if not os.path.exists(audio_path):
+            AudioUtils.logger.error(f"文件不存在: {audio_path}")
+            return 0.0
             
-        Returns:
-            包含音频信息的字典
-        """
-        logger = logging.getLogger(__name__)
+        # 根据文件扩展名确定格式
+        _, ext = os.path.splitext(audio_path)
+        format = ext.strip('.').lower()
         
-        try:
-            # 使用FFmpeg获取音频信息
-            cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', 
-                  '-show_format', '-show_streams', audio_path]
-            
+        # 尝试使用wave模块读取WAV文件
+        if format == 'wav':
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                data = eval(result.stdout.replace('null', 'None').replace('true', 'True').replace('false', 'False'))
-                
-                # 解析结果
-                info = {}
-                
-                # 基本信息
-                if 'format' in data:
-                    info['format'] = data['format'].get('format_name', '')
-                    info['duration'] = float(data['format'].get('duration', 0))
-                    info['size'] = int(data['format'].get('size', 0))
-                    info['bit_rate'] = int(data['format'].get('bit_rate', 0))
-                
-                # 流信息
-                if 'streams' in data and data['streams']:
-                    audio_stream = next((s for s in data['streams'] if s.get('codec_type') == 'audio'), None)
-                    if audio_stream:
-                        info['codec'] = audio_stream.get('codec_name', '')
-                        info['sample_rate'] = int(audio_stream.get('sample_rate', 0))
-                        info['channels'] = int(audio_stream.get('channels', 0))
-                
-                logger.info(f"音频信息: {info}")
-                return info
-                
-            except (subprocess.SubprocessError, ValueError) as e:
-                logger.warning(f"使用FFprobe获取音频信息失败: {str(e)}")
-                
-                # 回退方法：使用pydub加载音频获取基本信息
+                with contextlib.closing(wave.open(audio_path, 'r')) as f:
+                    frames = f.getnframes()
+                    rate = f.getframerate()
+                    duration = frames / float(rate)
+                    AudioUtils.logger.info(f"使用wave模块获取到WAV文件时长: {duration:.2f}秒")
+                    return duration
+            except Exception as e:
+                AudioUtils.logger.warning(f"使用wave模块获取WAV文件时长失败: {str(e)}")
+        
+        # 尝试使用pydub获取时长
+        if PYDUB_AVAILABLE:
+            try:
                 audio = AudioUtils.load_audio(audio_path)
-                return {
-                    'duration': len(audio) / 1000,  # 秒
-                    'channels': audio.channels,
-                    'sample_rate': audio.frame_rate,
-                    'bit_rate': audio.frame_rate * audio.sample_width * audio.channels * 8
-                }
-                
+                duration = len(audio) / 1000.0  # pydub以毫秒为单位
+                AudioUtils.logger.info(f"使用pydub获取到音频时长: {duration:.2f}秒")
+                return duration
+            except Exception as e:
+                AudioUtils.logger.warning(f"使用pydub获取音频时长失败: {str(e)}")
+        
+        # 尝试使用ffprobe获取时长
+        try:
+            cmd = [
+                'ffprobe', 
+                '-i', audio_path,
+                '-show_entries', 'format=duration',
+                '-v', 'quiet',
+                '-of', 'csv=p=0'
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                duration = float(result.stdout.strip())
+                AudioUtils.logger.info(f"使用ffprobe获取到音频时长: {duration:.2f}秒")
+                return duration
         except Exception as e:
-            logger.exception(f"获取音频信息失败: {str(e)}")
-            # 返回一个空字典，而不是抛出异常
-            return {}
+            AudioUtils.logger.warning(f"使用ffprobe获取音频时长失败: {str(e)}")
+        
+        # 所有方法都失败，返回0
+        AudioUtils.logger.error(f"无法获取音频时长: {audio_path}")
+        return 0.0
+    
+    @staticmethod
+    def get_audio_info(audio_path: str) -> Dict[str, Any]:
+        """获取音频文件信息，包括时长、采样率、通道数等"""
+        AudioUtils.logger.info(f"获取音频信息: {audio_path}")
+        
+        if not os.path.exists(audio_path):
+            AudioUtils.logger.error(f"文件不存在: {audio_path}")
+            raise FileNotFoundError(f"文件不存在: {audio_path}")
+        
+        info = {
+            "path": audio_path,
+            "exists": True,
+            "size_bytes": os.path.getsize(audio_path),
+            "size_mb": os.path.getsize(audio_path) / (1024 * 1024),
+            "duration": 0.0,
+            "sample_rate": 0,
+            "channels": 0,
+            "format": os.path.splitext(audio_path)[1].strip('.').lower()
+        }
+        
+        # 尝试使用wave模块获取WAV文件信息
+        if info["format"] == 'wav':
+            try:
+                with contextlib.closing(wave.open(audio_path, 'r')) as f:
+                    info["channels"] = f.getnchannels()
+                    info["sample_width"] = f.getsampwidth()
+                    info["sample_rate"] = f.getframerate()
+                    frames = f.getnframes()
+                    info["duration"] = frames / float(info["sample_rate"])
+                    AudioUtils.logger.info(f"使用wave模块获取到WAV文件信息: {info}")
+                    return info
+            except Exception as e:
+                AudioUtils.logger.warning(f"使用wave模块获取WAV文件信息失败: {str(e)}")
+        
+        # 尝试使用pydub获取音频信息
+        if PYDUB_AVAILABLE:
+            try:
+                audio = AudioUtils.load_audio(audio_path)
+                info["duration"] = len(audio) / 1000.0  # pydub以毫秒为单位
+                info["sample_rate"] = audio.frame_rate
+                info["channels"] = audio.channels
+                info["sample_width"] = audio.sample_width
+                AudioUtils.logger.info(f"使用pydub获取到音频信息: {info}")
+                return info
+            except Exception as e:
+                AudioUtils.logger.warning(f"使用pydub获取音频信息失败: {str(e)}")
+        
+        # 尝试使用ffprobe获取音频信息
+        try:
+            AudioUtils.logger.info(f"尝试使用ffprobe获取音频信息: {audio_path}")
+            cmd = [
+                'ffprobe', 
+                '-i', audio_path,
+                '-show_entries', 'format=duration,size : stream=sample_rate,channels',
+                '-v', 'quiet',
+                '-of', 'json'
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    import json
+                    data = json.loads(result.stdout)
+                    
+                    if 'format' in data and 'duration' in data['format']:
+                        info["duration"] = float(data['format']['duration'])
+                    
+                    if 'streams' in data and len(data['streams']) > 0:
+                        audio_stream = None
+                        # 查找音频流
+                        for stream in data['streams']:
+                            if 'codec_type' in stream and stream['codec_type'] == 'audio':
+                                audio_stream = stream
+                                break
+                        
+                        if audio_stream:
+                            if 'sample_rate' in audio_stream:
+                                info["sample_rate"] = int(audio_stream['sample_rate'])
+                            if 'channels' in audio_stream:
+                                info["channels"] = int(audio_stream['channels'])
+                    
+                    AudioUtils.logger.info(f"使用ffprobe获取到音频信息: {info}")
+                    return info
+                except json.JSONDecodeError as e:
+                    AudioUtils.logger.warning(f"解析ffprobe输出失败: {str(e)}")
+                except Exception as e:
+                    AudioUtils.logger.warning(f"处理ffprobe输出时出错: {str(e)}")
+                    
+        except Exception as e:
+            AudioUtils.logger.warning(f"使用ffprobe获取音频信息失败: {str(e)}")
+        
+        # 至少确保获取时长
+        if info["duration"] == 0:
+            info["duration"] = AudioUtils.get_audio_duration(audio_path)
+        
+        if info["duration"] > 0:
+            AudioUtils.logger.info(f"获取到部分音频信息: {info}")
+            return info
+        
+        AudioUtils.logger.error(f"无法获取任何音频信息: {audio_path}")
+        raise RuntimeError(f"无法获取音频信息: {audio_path}")
     
     @staticmethod
     def make_safe_filename(text: str) -> str:
-        """
-        将文本转换为安全的文件名
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            安全的文件名
-        """
+        """将文本转换为安全的文件名"""
         # 移除不安全的字符
         safe_text = re.sub(r'[^\w\s.-]', '', text)
         # 将空白替换为下划线
@@ -130,4 +224,30 @@ class AudioUtils:
         safe_text = safe_text[:255]
         # 移除开头的点号
         safe_text = safe_text.lstrip('.')
-        return safe_text 
+        return safe_text
+    
+    @staticmethod
+    def is_valid_audio_file(file_path: str) -> bool:
+        """检查音频文件是否有效"""
+        if not os.path.exists(file_path):
+            return False
+        
+        try:
+            # 使用FFprobe检查文件是否为有效音频
+            cmd = [
+                "ffprobe", 
+                "-v", "error", 
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type", 
+                "-of", "default=noprint_wrappers=1:nokey=1", 
+                file_path
+            ]
+            
+            process = subprocess.run(cmd, capture_output=True, text=True)
+            
+            # 检查FFprobe是否成功找到音频流
+            return process.returncode == 0 and "audio" in process.stdout.strip()
+                
+        except Exception as e:
+            AudioUtils.logger.error(f"检查音频文件有效性时出错: {str(e)}")
+            return False
