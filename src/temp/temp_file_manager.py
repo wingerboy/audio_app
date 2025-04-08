@@ -39,6 +39,9 @@ class TempFileManager:
         
         # 跟踪创建的所有临时文件
         self.temp_files: List[str] = []
+        
+        # 添加保护文件列表，这些文件不会被cleanup方法清理
+        self.protected_files: List[str] = []
     
     def create_temp_file(self, suffix: str = "", prefix: Optional[str] = None) -> str:
         """
@@ -111,6 +114,42 @@ class TempFileManager:
         self.logger.debug(f"创建临时目录: {temp_dir}")
         return temp_dir
     
+    def protect_file(self, file_path: str) -> bool:
+        """
+        将文件添加到保护列表，防止被cleanup方法清理
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            添加是否成功
+        """
+        if not os.path.exists(file_path):
+            self.logger.warning(f"尝试保护不存在的文件: {file_path}")
+            return False
+            
+        if file_path not in self.protected_files:
+            self.protected_files.append(file_path)
+            self.logger.debug(f"添加文件到保护列表: {file_path}")
+            return True
+        return False
+    
+    def unprotect_file(self, file_path: str) -> bool:
+        """
+        从保护列表中移除文件
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            移除是否成功
+        """
+        if file_path in self.protected_files:
+            self.protected_files.remove(file_path)
+            self.logger.debug(f"从保护列表中移除文件: {file_path}")
+            return True
+        return False
+    
     def remove_file(self, file_path: str) -> bool:
         """
         删除临时文件
@@ -121,6 +160,11 @@ class TempFileManager:
         Returns:
             删除是否成功
         """
+        # 检查文件是否在保护列表中
+        if file_path in self.protected_files:
+            self.logger.debug(f"跳过删除受保护的文件: {file_path}")
+            return False
+            
         if file_path in self.temp_files:
             try:
                 if os.path.isdir(file_path):
@@ -139,24 +183,30 @@ class TempFileManager:
             return False
     
     def cleanup(self) -> None:
-        """清理所有临时文件"""
-        self.logger.debug(f"清理临时文件会话: {self.session_dir}")
+        """清理所有临时文件，但保留受保护的文件"""
+        self.logger.debug(f"清理临时文件会话: {self.session_dir}, 跳过 {len(self.protected_files)} 个受保护文件")
         
-        # 清理所有临时文件
-        files_to_clean = list(self.temp_files)  # 创建副本以避免在循环中修改
+        # 清理所有临时文件，除了受保护的文件
+        files_to_clean = [f for f in self.temp_files if f not in self.protected_files]
+        
         for file_path in files_to_clean:
             self.remove_file(file_path)
         
-        # 最后尝试清理会话目录
-        try:
-            if os.path.exists(self.session_dir):
-                shutil.rmtree(self.session_dir)
-                self.logger.debug(f"删除临时会话目录: {self.session_dir}")
-        except Exception as e:
-            self.logger.error(f"删除临时会话目录失败: {self.session_dir}, 错误: {str(e)}")
+        # 如果会话目录中已经没有文件，尝试删除会话目录
+        if not self.protected_files and os.path.exists(self.session_dir):
+            try:
+                # 检查目录是否为空
+                remaining_files = os.listdir(self.session_dir)
+                if not remaining_files:
+                    shutil.rmtree(self.session_dir)
+                    self.logger.debug(f"删除临时会话目录: {self.session_dir}")
+                else:
+                    self.logger.debug(f"会话目录非空，跳过删除: {self.session_dir}, 剩余 {len(remaining_files)} 个文件")
+            except Exception as e:
+                self.logger.error(f"删除临时会话目录失败: {self.session_dir}, 错误: {str(e)}")
     
     def __del__(self):
-        """析构函数，确保清理临时文件"""
+        """析构函数，确保清理临时文件，但保留受保护的文件"""
         try:
             self.cleanup()
         except:

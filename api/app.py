@@ -105,6 +105,7 @@ class TaskManager:
             # 设置上下文
             user_id = task.get("user_id")
             RequestContext.set_context(user_id=user_id, task_id=task_id, operation="get_task")
+        self.logger.debug(f"TaskManager 获取任务: {task_id}")
         return task
     
     def set_task(self, task_id: str, task_data: Dict):
@@ -117,7 +118,7 @@ class TaskManager:
         RequestContext.set_context(user_id=user_id, task_id=task_id, operation="set_task")
         
         if is_new:
-            self.logger.info(f"创建新任务: {task_id}, 文件: {task_data.get('filename', 'unknown')}")
+            self.logger.info(f"TaskManager 创建新任务: {task_id}, 文件: {task_data.get('filename', 'unknown')}")
         else:
             self.logger.info(f"更新任务: {task_id}, 状态: {task_data.get('status', 'unknown')}")
     
@@ -128,7 +129,7 @@ class TaskManager:
             user_id = task.get("user_id")
             RequestContext.set_context(user_id=user_id, task_id=task_id, operation="delete_task")
             
-            self.logger.info(f"删除任务: {task_id}")
+            self.logger.info(f"TaskManager 删除任务: {task_id}")
             del self._tasks[task_id]
     
     def get_all_tasks(self) -> Dict[str, Dict]:
@@ -140,6 +141,27 @@ class TaskManager:
             task_id: task for task_id, task in self._tasks.items() 
             if task.get("user_id") == user_id
         }
+
+        # 为task_manager添加一个辅助方法
+    def update_task_status(self, task_id, status, message, progress=None, error_details=None):
+        """更新任务状态的辅助方法"""
+        task = self.get_task(task_id)
+        self.logger.debug(f"TaskManager 更新任务状态: {task_id}, 状态: {status}, 消息: {message}, 进度: {progress}, 错误详情: {error_details}")
+        if task:
+            task["status"] = status
+            task["message"] = message
+            if progress is not None:
+                task["progress"] = progress
+            if error_details:
+                task["error_details"] = error_details
+                
+            # 保存任务信息
+            task_info = {
+                "id": task_id,
+                "status": status,
+                "update_time": time.strftime("%Y-%m-%d %X")
+            }
+            self.set_task(task_id, task_info)
 
 # 创建全局任务管理器实例
 task_manager = TaskManager()
@@ -476,7 +498,7 @@ def get_status():
 @app.route('/api/upload', methods=['POST'])
 @login_required
 def upload_file():
-    """处理文件上传 - 优化版本：使用流式处理和PyAV"""
+    """处理文件上传 - 优化版本：使用新的AudioProcessorAdapter"""
     if 'file' not in request.files:
         return jsonify({"error": "未找到文件"}), 400
     
@@ -526,14 +548,8 @@ def upload_file():
     audio_path = None
     audio_duration_seconds = 0
     
-    try:
-        # 检查是否可以使用PyAV
-        import av
-        use_pyav = True
-        logger.info("使用PyAV处理音频")
-    except ImportError:
-        use_pyav = False
-        logger.info("PyAV不可用，回退到FFmpeg命令行")
+    # 创建音频处理器
+    audio_processor = AudioProcessorAdapter(auto_cleanup=False)
     
     try:
         # 音频处理逻辑
@@ -544,99 +560,32 @@ def upload_file():
         else:
             # 提取音频
             logger.info(f"从上传的文件中提取音频: {file.filename}")
-            audio_path = os.path.join(task_dir, f"audio.wav")
-            
-            if use_pyav:
-                # 使用PyAV提取音频
-                try:
-                    input_container = av.open(file_path)
-                    output_container = av.open(audio_path, 'w')
-                    
-                    # 找到第一个音频流
-                    input_stream = next(s for s in input_container.streams if s.type == 'audio')
-                    
-                    # 创建输出流
-                    output_stream = output_container.add_stream(template=input_stream)
-                    
-                    # 处理帧
-                    for frame in input_container.decode(input_stream):
-                        for packet in output_stream.encode(frame):
-                            output_container.mux(packet)
-                    
-                    # 刷新所有剩余帧
-                    for packet in output_stream.encode(None):
-                        output_container.mux(packet)
-                    
-                    # 关闭容器
-                    output_container.close()
-                    input_container.close()
-                    
-                    if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-                        logger.info(f"PyAV 音频提取成功: {audio_path}")
-                    else:
-                        raise RuntimeError("PyAV提取的音频文件为空")
-                        
-                except Exception as e:
-                    logger.warning(f"PyAV提取音频失败，回退到FFmpeg: {str(e)}")
-                    use_pyav = False
-            
-            if not use_pyav:
-                # 回退到使用FFmpeg命令行
-                audio_processor = AudioProcessorAdapter()
-                extracted_path = audio_processor.extract_audio(file_path)
-                if extracted_path:
-                    # 复制到任务目录
-                    shutil.copy2(extracted_path, audio_path)
-                    logger.info(f"FFmpeg音频提取成功: {audio_path}")
-                else:
-                    logger.warning(f"无法从文件中提取音频: {file.filename}")
-                    audio_path = None
+            audio_path = audio_processor.extract_audio(file_path)
+            if not audio_path:
+                logger.warning(f"无法从文件中提取音频: {file.filename}")
+                audio_path = file_path
     except Exception as e:
         logger.warning(f"音频提取过程中出错: {str(e)}")
         # 如果提取失败，尝试继续使用原始文件
         if not audio_path or not os.path.exists(audio_path):
             audio_path = file_path
     
-    # 获取音频时长 - 优先使用PyAV以提高性能
-    if audio_path and os.path.exists(audio_path):
-        try:
-            if use_pyav:
-                # 使用PyAV获取音频时长
-                with av.open(audio_path) as container:
-                    # 获取音频流
-                    stream = next(s for s in container.streams if s.type == 'audio')
-                    # 计算时长（秒）
-                    if stream.duration and stream.time_base:
-                        audio_duration_seconds = stream.duration * float(stream.time_base)
-                    else:
-                        # 回退：使用总时长除以音频流数量
-                        audio_duration_seconds = container.duration / 1000000.0  # 微秒转秒
-                    
-                    logger.info(f"使用PyAV获取音频时长: {audio_duration_seconds:.2f} 秒")
-            else:
-                # 回退到AudioUtils
-                from src.audio.utils import AudioUtils
-                audio_duration_seconds = AudioUtils.get_audio_duration(audio_path)
-                logger.info(f"使用AudioUtils获取音频时长: {audio_duration_seconds:.2f} 秒")
-                
-            if audio_duration_seconds <= 0:
-                # 如果获取失败，使用基于文件大小的估算
-                logger.warning(f"无法获取准确音频时长，使用基于文件大小的估算")
-                file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-                audio_duration_seconds = file_size_mb * 2  # 假设每MB约2秒音频
-        except Exception as e:
-            logger.warning(f"获取音频时长失败: {str(e)}")
-            # 使用基于文件大小的估算
+    # 获取音频时长
+    try:
+        from src.audio.audio_utils import AudioUtils
+        audio_duration_seconds = AudioUtils.get_audio_duration(audio_path)
+        logger.info(f"获取音频时长: {audio_duration_seconds:.2f} 秒")
+        
+        if audio_duration_seconds <= 0:
+            # 如果获取失败，使用基于文件大小的估算
+            logger.warning(f"无法获取准确音频时长，使用基于文件大小的估算")
             file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-            audio_duration_seconds = file_size_mb * 2
-    else:
-        # 如果提取失败，尝试直接从原始文件获取时长
-        try:
-            from src.audio.utils import AudioUtils
-            audio_duration_seconds = AudioUtils.get_audio_duration(file_path)
-        except Exception:
-            # 最终回退：基于文件大小估算
-            audio_duration_seconds = file_size_mb * 2
+            audio_duration_seconds = file_size_mb * 2  # 假设每MB约2秒音频
+    except Exception as e:
+        logger.warning(f"获取音频时长失败: {str(e)}")
+        # 使用基于文件大小的估算
+        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        audio_duration_seconds = file_size_mb * 2
     
     # 计算音频时长（分钟）和预估费用
     audio_duration_minutes = audio_duration_seconds / 60
@@ -649,15 +598,15 @@ def upload_file():
             file_size_mb=file_size_mb, 
             audio_duration_minutes=audio_duration_minutes
         )
-        estimated_cost = analyze_cost["estimated_cost"]
-        logger.info(f"已计算预估费用: {estimated_cost}")
+        estimated_cost = analyze_cost.get("estimated_cost", 0)
     except Exception as e:
         logger.warning(f"计算预估费用失败: {str(e)}")
     
     # 记录任务信息
     task_info = {
         "id": task_id,
-        "filename": file.filename,
+        "user_id": user_id,
+        "filename": filename,
         "path": file_path,
         "original_file": file_path,
         "audio_path": audio_path,
@@ -666,9 +615,8 @@ def upload_file():
         "audio_duration_minutes": audio_duration_minutes,
         "status": "uploaded",
         "progress": 0,
-        "message": "文件已上传",
+        "message": "文件已上传，等待处理",
         "created_at": int(time.time()),
-        "user_id": user_id,
         "estimated_cost": estimated_cost
     }
     
@@ -687,7 +635,7 @@ def upload_file():
         "audio_duration_seconds": audio_duration_seconds,
         "audio_duration_minutes": audio_duration_minutes,
         "estimated_cost": estimated_cost,
-        "processing_time": processing_time
+        "audio_path": audio_path
     })
 
 @app.route('/api/analyze', methods=['POST'])
@@ -723,16 +671,16 @@ def analyze_audio():
     # 检查余额是否足够
     if current_balance < estimated_cost:
         error_msg = f"余额不足，当前余额 {current_balance} 点，需要 {estimated_cost} 点"
-        logger.warning(f"用户 {user_id} {error_msg}")
+        logger.warning(f"用户 {user.id} {error_msg}")
         return jsonify({
             "error": "余额不足",
             "current_balance": current_balance,
             "estimated_cost": estimated_cost
         }), 402
+    
     file_path = task["path"]
     
     # 设置任务上下文
-    user_id = task.get("user_id")
     RequestContext.set_context(user_id=user_id, task_id=task_id, operation="analyze_audio")
     logger.info(f"开始分析音频任务: {task_id}, 文件: {os.path.basename(file_path)}")
     
@@ -751,34 +699,38 @@ def analyze_audio():
         if not audio_path or not os.path.exists(audio_path):
             # 只有在上传阶段没有提取音频时才提取
             progress_callback("提取音频中...", 5)
-            audio_processor = AudioProcessorAdapter()
-            audio_path = audio_processor.extract_audio(file_path, progress_callback=progress_callback)
+            audio_processor = AudioProcessorAdapter(auto_cleanup=False)
+            audio_path = audio_processor.extract_audio(file_path)
             
             if not audio_path:
                 task["status"] = "failed"
                 task["message"] = "音频提取失败"
                 return jsonify({"error": "音频提取失败"}), 500
             
-            # 创建任务专用的持久化目录
-            task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
-            os.makedirs(task_dir, exist_ok=True)
+            # 更新任务中的音频路径
+            task["audio_path"] = audio_path
             
-            # 复制提取的音频文件到持久化目录
-            filename, ext = os.path.splitext(os.path.basename(audio_path))
-            persistent_audio_path = os.path.join(task_dir, f"{filename}{ext}")
+            # 将提取的音频文件复制到任务目录以确保其安全
             try:
-                logger.info(f"复制音频文件到持久化路径: {audio_path} -> {persistent_audio_path}")
-                shutil.copy2(audio_path, persistent_audio_path)
-                # 更新音频路径为持久化路径
-                audio_path = persistent_audio_path
+                task_dir = os.path.join(TASKS_DIR, task_id)
+                task_audio_path = os.path.join(task_dir, "processed_audio.wav")
+                shutil.copy2(audio_path, task_audio_path)
+                logger.info(f"音频文件已复制到任务目录: {task_audio_path}")
+                task["audio_path"] = task_audio_path  # 更新为任务目录中的路径
             except Exception as e:
-                logger.warning(f"复制音频文件失败: {str(e)}，将继续使用临时路径")
+                logger.warning(f"复制音频文件到任务目录失败: {str(e)}")
+            
+            # 将音频文件添加到处理器的保护列表
+            if hasattr(audio_processor, 'important_files'):
+                audio_processor.important_files.append(audio_path)
+                logger.info(f"音频文件已添加到处理器的保护列表: {audio_path}")
+                
         else:
             progress_callback("使用已提取的音频...", 15)
             logger.info(f"使用上传时已提取的音频: {audio_path}")
         
         # 分析音频
-        progress_callback(f"使用云API分析音频内容...", 20)  # 修改提示信息
+        progress_callback(f"使用云API分析音频内容...", 20)
         audio_analyzer = AIAnalyzerAdapter()
         transcription = audio_analyzer.transcribe_audio(
             audio_path, 
@@ -792,8 +744,6 @@ def analyze_audio():
         
         # 保存转录结果
         task["transcription"] = transcription
-        task["audio_path"] = audio_path
-        task["persistent_audio"] = audio_path  # 添加持久化音频路径的标记
         task["status"] = "analyzed"
         task["progress"] = 100
         task["message"] = "分析完成"
@@ -810,7 +760,7 @@ def analyze_audio():
             original_file = task.get("original_file", "")
             
             # 记录API使用并扣除余额
-            usage_result = ApiUsageService.record_api_usage(
+            ApiUsageService.record_api_usage(
                 user_id=user_id,
                 api_type="analyze_audio",
                 task_id=task_id,
@@ -863,8 +813,6 @@ def split_audio():
     RequestContext.set_context(user_id=user_id, task_id=task_id, operation="split_audio")
     logger.info(f"开始分割音频任务: {task_id}, 分段数: {len(segments)}")
     
-    # 余额检查已由装饰器处理
-    
     # 更新任务状态
     task["status"] = "splitting"
     task["progress"] = 0
@@ -882,55 +830,84 @@ def split_audio():
         
         # 检查音频文件是否存在
         if not os.path.exists(audio_path):
-            logger.error(f"音频文件不存在: {audio_path}")
+            logger.warning(f"音频文件不存在: {audio_path}")
             
-            # 如果使用的是持久化音频但文件被删除，尝试从原始文件重新提取
-            if "original_file" in task and os.path.exists(task["original_file"]):
+            # 尝试搜索常见的临时目录位置查找音频文件
+            temp_dirs = [
+                "/tmp",  # 标准临时目录
+                os.path.dirname(audio_path),  # 原路径的目录
+                os.path.join(os.path.dirname(os.path.dirname(audio_path)), "tmp")  # 上级目录的tmp子目录
+            ]
+            
+            found_audio = False
+            extracted_filename = os.path.basename(audio_path)
+            
+            # 搜索所有临时目录下的 audio_processor_* 文件夹
+            for temp_dir in temp_dirs:
+                if os.path.exists(temp_dir):
+                    for dir_name in os.listdir(temp_dir):
+                        if dir_name.startswith("audio_processor_"):
+                            possible_path = os.path.join(temp_dir, dir_name, extracted_filename)
+                            if os.path.exists(possible_path):
+                                logger.info(f"找到替代音频文件: {possible_path}")
+                                audio_path = possible_path
+                                task["audio_path"] = audio_path
+                                found_audio = True
+                                break
+                if found_audio:
+                    break
+            
+            # 如果音频文件不存在，尝试从原始文件重新提取
+            if not found_audio and "original_file" in task and os.path.exists(task["original_file"]):
                 original_file = task["original_file"]
                 logger.info(f"重新从原始文件提取音频: {original_file}")
                 
-                # 创建音频处理器
+                # 创建音频处理器 - 禁用自动清理
                 audio_processor = AudioProcessorAdapter(auto_cleanup=False)
                 
                 # 提取音频
-                temp_audio_path = audio_processor.extract_audio(
+                audio_path = audio_processor.extract_audio(
                     original_file, 
                     progress_callback=lambda msg, progress: progress_callback(f"重新提取音频: {msg}", progress)
                 )
                 
-                if not temp_audio_path:
+                if not audio_path:
                     error_msg = "重新提取音频失败"
                     logger.error(error_msg)
                     task["status"] = "failed"
                     task["message"] = error_msg
                     return jsonify({"error": error_msg}), 500
                 
-                # 复制到持久化目录
-                filename, ext = os.path.splitext(os.path.basename(temp_audio_path))
-                audio_path = os.path.join(task_dir, f"{filename}{ext}")
-                
-                try:
-                    shutil.copy2(temp_audio_path, audio_path)
-                    logger.info(f"复制音频到持久化路径: {temp_audio_path} -> {audio_path}")
-                    
-                    # 更新任务中的音频路径
-                    task["audio_path"] = audio_path
-                    task["persistent_audio"] = audio_path
-                except Exception as e:
-                    logger.error(f"复制音频文件失败: {str(e)}")
-                    # 如果复制失败，使用临时文件路径
-                    audio_path = temp_audio_path
-                    task["audio_path"] = audio_path
-            else:
+                # 更新任务中的音频路径
+                task["audio_path"] = audio_path
+                logger.info(f"更新后的音频路径: {audio_path}")
+            elif not found_audio:
                 error_msg = "音频文件不存在且无法重新提取"
                 logger.error(error_msg)
                 task["status"] = "failed"
                 task["message"] = error_msg
                 return jsonify({"error": error_msg}), 500
         
+        # 验证音频文件是否有效
+        try:
+            from src.audio.audio_utils import AudioUtils
+            audio_info = AudioUtils.get_audio_info(audio_path)
+            logger.info(f"音频文件有效，信息: {audio_info}")
+        except Exception as e:
+            error_msg = f"音频文件无效: {str(e)}"
+            logger.error(error_msg)
+            task["status"] = "failed"
+            task["message"] = error_msg
+            return jsonify({"error": error_msg}), 500
+        
         # 分割音频
         logger.info(f"开始分割音频: {audio_path} -> {output_dir}, 分段数: {len(segments)}")
         audio_processor = AudioProcessorAdapter(use_disk_processing=True, auto_cleanup=False)
+        
+        # 将音频文件添加到处理器的保护列表中
+        if hasattr(audio_processor, 'important_files'):
+            audio_processor.important_files.append(audio_path)
+            logger.info(f"将音频文件添加到处理器的保护列表: {audio_path}")
         
         # 执行分割
         output_files = audio_processor.split_audio(
@@ -992,7 +969,9 @@ def split_audio():
             "details": str(e)
         }), 500
 
+
 @app.route('/api/tasks/<task_id>', methods=['GET'])
+@jwt_required()
 def get_task(task_id):
     """获取任务状态"""
     task = task_manager.get_task(task_id)
@@ -1009,6 +988,7 @@ def get_task(task_id):
     return jsonify(task_info)
 
 @app.route('/api/download/<task_id>/<int:file_index>', methods=['GET'])
+@jwt_required()
 def download_file(task_id, file_index):
     """下载分割后的文件"""
     task = task_manager.get_task(task_id)
@@ -1024,7 +1004,8 @@ def download_file(task_id, file_index):
     file_path = task["output_files"][file_index]
     return send_file(file_path, as_attachment=True)
 
-@app.route('/api/download/<task_id>/zip', methods=['GET'])
+@app.route('/api/download/<task_id>/zip', methods=['GET']) 
+@jwt_required()
 def download_zip(task_id):
     """下载所有分割文件的ZIP压缩包"""
     import zipfile
@@ -1059,6 +1040,7 @@ def download_zip(task_id):
     )
 
 @app.route('/api/cleanup/<task_id>', methods=['DELETE'])
+@jwt_required()
 def cleanup_task(task_id):
     """清理任务资源"""
     task = task_manager.get_task(task_id)

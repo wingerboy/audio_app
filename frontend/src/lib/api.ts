@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // 获取API基础URL
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002/api';
-// const API_BASE_URL = 'http://117.50.172.107:5002/api';
+// const API_BASE_URL = 'http://8.155.13.90:5002/api';
 // 创建API客户端
 const api = axios.create({
   baseURL: API_BASE_URL, // 使用环境变量中的API地址
@@ -96,10 +96,6 @@ export interface TaskStatus {
   audio_duration_seconds?: number;
   audio_duration_minutes?: number;
   estimated_cost?: number;
-  failedAtStep?: string;    // 失败发生的步骤
-  lastSuccessfulStep?: string; // 最后成功完成的步骤
-  selectedSegmentsForRetry?: Segment[]; // 为重试保存的分段选择
-  errorDetails?: string;    // 详细错误信息
 }
 
 // 用户相关类型

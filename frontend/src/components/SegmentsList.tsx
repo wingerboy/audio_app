@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { FiCheckCircle, FiCircle, FiEdit, FiSearch, FiFilter, FiCheckSquare, FiClock, FiXCircle, FiCheck, FiX } from 'react-icons/fi';
+import { useState, useEffect, useRef } from 'react';
+import { FiCheckCircle, FiCircle, FiEdit, FiSearch, FiClock, FiFilter, FiX } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import { Segment } from '@/lib/api';
 
@@ -16,18 +16,131 @@ export function SegmentsList() {
     clearSelectedSegments
   } = useAppStore();
   
+  // 计算最长片段的持续时间
+  const maxSegmentDuration = Math.ceil(
+    segments.reduce((max, segment) => {
+      const duration = segment.end - segment.start;
+      return duration > max ? duration : max;
+    }, 0)
+  );
+  
   // 本地状态
   const [filterQuery, setFilterQuery] = useState('');
   const [selectAll, setSelectAll] = useState(false);
-  // 添加过滤模式状态：默认是"filter"(过滤)，另一个选项是"include"(包含)
-  const [filterMode, setFilterMode] = useState<'filter' | 'include'>('filter');
-  // 添加时间区间过滤状态
-  const [minDuration, setMinDuration] = useState<number>(1);
-  const [maxDuration, setMaxDuration] = useState<number>(20);
+  // 过滤模式: 'filter'=过滤关键词, 'select'=选择包含关键词的片段
+  const [filterMode, setFilterMode] = useState<'filter' | 'select'>('filter');
+  // 添加时间区间过滤状态 - 默认范围是0到最长片段的时长
+  const [minDuration, setMinDuration] = useState<number>(0);
+  const [maxDuration, setMaxDuration] = useState<number>(maxSegmentDuration || 20);
   // 添加被剔除片段的状态
   const [rejectedSegments, setRejectedSegments] = useState<Segment[]>([]);
   // 添加当前活动Tab状态
   const [activeTab, setActiveTab] = useState<'all' | 'selected' | 'rejected'>('all');
+  
+  // 滑块引用
+  const minSliderRef = useRef<HTMLDivElement>(null);
+  const maxSliderRef = useRef<HTMLDivElement>(null);
+  const sliderTrackRef = useRef<HTMLDivElement>(null);
+  
+  // 当任务状态变化时重置选择状态
+  useEffect(() => {
+    // 当进入分割音频步骤时，清空已选择和已剔除的片段
+    if (currentTask?.status === 'completed') {
+      clearSelectedSegments();
+      setRejectedSegments([]);
+      setActiveTab('all');
+    }
+  }, [currentTask, clearSelectedSegments]);
+  
+  // 当segments变化时更新maxDuration
+  useEffect(() => {
+    const newMaxDuration = Math.ceil(
+      segments.reduce((max, segment) => {
+        const duration = segment.end - segment.start;
+        return duration > max ? duration : max;
+      }, 0)
+    );
+    
+    if (newMaxDuration > 0) {
+      // 只有当计算出的最大持续时间大于0时才更新
+      setMaxDuration(newMaxDuration);
+      // 如果当前minDuration比newMaxDuration大，重置minDuration
+      if (minDuration > newMaxDuration) {
+        setMinDuration(0);
+      }
+    }
+  }, [segments, minDuration]);
+  
+  // 设置滑块拖动事件
+  useEffect(() => {
+    const handleMinDrag = (e: MouseEvent) => {
+      if (!sliderTrackRef.current) return;
+      const track = sliderTrackRef.current;
+      const rect = track.getBoundingClientRect();
+      const percentage = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const newValue = Math.round(percentage * maxSegmentDuration);
+      
+      // 确保最小值不大于最大值
+      if (newValue <= maxDuration) {
+        setMinDuration(newValue);
+      }
+    };
+    
+    const handleMaxDrag = (e: MouseEvent) => {
+      if (!sliderTrackRef.current) return;
+      const track = sliderTrackRef.current;
+      const rect = track.getBoundingClientRect();
+      const percentage = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const newValue = Math.round(percentage * maxSegmentDuration);
+      
+      // 确保最大值不小于最小值
+      if (newValue >= minDuration) {
+        setMaxDuration(newValue);
+      }
+    };
+    
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMinDrag);
+      document.removeEventListener('mousemove', handleMaxDrag);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    // 创建独立的事件处理器，分别处理最小值和最大值滑块
+    const setupMinDragEvents = (e: MouseEvent) => {
+      e.preventDefault();
+      document.addEventListener('mousemove', handleMinDrag);
+      document.addEventListener('mouseup', handleMouseUp);
+    };
+    
+    const setupMaxDragEvents = (e: MouseEvent) => {
+      e.preventDefault();
+      document.addEventListener('mousemove', handleMaxDrag);
+      document.addEventListener('mouseup', handleMouseUp);
+    };
+    
+    const minSlider = minSliderRef.current;
+    const maxSlider = maxSliderRef.current;
+    
+    if (minSlider) {
+      minSlider.addEventListener('mousedown', setupMinDragEvents);
+    }
+    
+    if (maxSlider) {
+      maxSlider.addEventListener('mousedown', setupMaxDragEvents);
+    }
+    
+    return () => {
+      if (minSlider) {
+        minSlider.removeEventListener('mousedown', setupMinDragEvents);
+      }
+      if (maxSlider) {
+        maxSlider.removeEventListener('mousedown', setupMaxDragEvents);
+      }
+      document.removeEventListener('mousemove', handleMinDrag);
+      document.removeEventListener('mousemove', handleMaxDrag);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [minDuration, maxDuration, maxSegmentDuration]);
   
   // 如果没有任务或分段数据，显示错误
   if (!currentTask || segments.length === 0) {
@@ -40,113 +153,83 @@ export function SegmentsList() {
     );
   }
   
-  // 处理最小持续时间变化
-  const handleMinDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = parseInt(e.target.value);
-    setMinDuration(Math.min(value, maxDuration - 1));
-  };
-  
-  // 处理最大持续时间变化
-  const handleMaxDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = parseInt(e.target.value);
-    setMaxDuration(Math.max(value, minDuration + 1));
-  };
-
-  // 处理剔除片段
-  const rejectSegment = (segment: Segment) => {
-    // 首先从已选择的片段中移除（如果存在）
-    if (selectedSegments.some(s => s.id === segment.id)) {
-      unselectSegment(Number(segment.id));
-    }
-    // 然后加入到已剔除的片段中
-    if (!rejectedSegments.some(s => s.id === segment.id)) {
-      setRejectedSegments([...rejectedSegments, segment]);
-    }
-  };
-
-  // 取消剔除片段
-  const unrejectSegment = (segmentId: string | number) => {
-    setRejectedSegments(rejectedSegments.filter(s => s.id !== segmentId));
-  };
-
-  // 处理选择片段（添加互斥逻辑）
-  const handleSelectSegment = (segment: Segment) => {
-    if (selectedSegments.some(s => s.id === segment.id)) {
-      // 如果已经被选择，则取消选择
-      unselectSegment(Number(segment.id));
-    } else {
-      // 如果在剔除列表中，先从剔除列表移除
-      if (rejectedSegments.some(s => s.id === segment.id)) {
-        unrejectSegment(segment.id);
-      }
-      // 然后添加到选择列表
-      selectSegment(segment);
-    }
-  };
-
-  // 处理剔除片段（确保互斥）
-  const handleRejectSegment = (segment: Segment) => {
-    if (rejectedSegments.some(s => s.id === segment.id)) {
-      // 如果已经被剔除，则取消剔除
-      unrejectSegment(segment.id);
-    } else {
-      // 执行剔除（函数内部会处理互斥逻辑）
-      rejectSegment(segment);
-    }
-  };
-  
-  // 基于当前活动tab和过滤条件过滤分段
-  const getFilteredSegments = () => {
-    // 首先，根据活动tab筛选片段
-    let tabFilteredSegments: Segment[] = [];
+  // 基于关键词过滤或选择分段
+  const applyKeywordFilter = () => {
+    if (!filterQuery.trim()) return segments;
     
-    if (activeTab === 'all') {
-      // 全部：显示既不在已选择也不在已剔除的片段
-      tabFilteredSegments = segments.filter(segment => 
-        !selectedSegments.some(s => s.id === segment.id) && 
-        !rejectedSegments.some(s => s.id === segment.id)
+    // 分割过滤关键词（支持中英文逗号）
+    const filterWords = filterQuery.split(/[,，]/).map(word => word.trim()).filter(word => word);
+    
+    if (filterMode === 'filter') {
+      // 过滤模式：如果段落中包含任何一个过滤词，则过滤掉该段落
+      return segments.filter(segment => 
+        !filterWords.some(word => segment.text.toLowerCase().includes(word.toLowerCase()))
       );
-    } else if (activeTab === 'selected') {
-      // 已选择：只显示已选择的片段
-      tabFilteredSegments = selectedSegments;
-    } else { // activeTab === 'rejected'
-      // 已剔除：只显示已剔除的片段
-      tabFilteredSegments = rejectedSegments;
+    } else {
+      // 选择模式：如果段落中包含任何一个关键词，则选择该段落
+      const matchedSegments = segments.filter(segment => 
+        filterWords.some(word => segment.text.toLowerCase().includes(word.toLowerCase()))
+      );
+      
+      // 自动选择匹配的段落
+      matchedSegments.forEach(segment => {
+        if (!selectedSegments.some(s => s.id === segment.id) && 
+            !rejectedSegments.some(s => s.id === segment.id)) {
+          selectSegment(segment);
+        }
+      });
+      
+      // 返回匹配的段落
+      return matchedSegments;
     }
-    
-    // 然后，应用其他过滤条件
-    return tabFilteredSegments.filter(segment => {
-      // 首先检查时间区间过滤
-      const duration = segment.end - segment.start;
-      // 如果不在时间区间内，直接过滤掉
-      if (duration < minDuration || duration > maxDuration) {
-        return false;
-      }
-      
-      // 如果没有关键词过滤，则保留该片段
-      if (!filterQuery.trim()) {
-        return true;
-      }
-      
-      // 分割过滤关键词（支持中英文逗号）
-      const filterWords = filterQuery.split(/[,，]/).map(word => word.trim()).filter(word => word);
-      
-      if (filterMode === 'filter') {
-        // 过滤模式：如果段落中包含任何一个过滤词，则过滤掉该段落
-        return !filterWords.some(word => 
-          segment.text.toLowerCase().includes(word.toLowerCase())
-        );
-      } else {
-        // 包含模式：如果段落中包含任何一个关键词，则保留该段落
-        return filterWords.some(word => 
-          segment.text.toLowerCase().includes(word.toLowerCase())
-        );
-      }
-    });
   };
   
-  // 获取当前过滤后的片段
-  const filteredSegments = getFilteredSegments();
+  // 应用关键词过滤/选择
+  const keywordFilteredSegments = applyKeywordFilter();
+  
+  // 应用时长过滤
+  const durationFilteredSegments = keywordFilteredSegments.filter(segment => {
+    const duration = segment.end - segment.start;
+    return duration >= minDuration && duration <= maxDuration;
+  });
+  
+  // 根据当前标签页决定显示哪些分段
+  const displaySegments = (() => {
+    switch (activeTab) {
+      case 'selected':
+        return durationFilteredSegments.filter(segment => 
+          selectedSegments.some(s => s.id === segment.id)
+        );
+      case 'rejected':
+        // 对被剔除的段落也应用关键词和时长过滤
+        return rejectedSegments.filter(segment => {
+          // 应用时长过滤
+          const duration = segment.end - segment.start;
+          const durationMatches = duration >= minDuration && duration <= maxDuration;
+          
+          // 应用关键词过滤
+          let keywordMatches = true;
+          if (filterQuery.trim()) {
+            const filterWords = filterQuery.split(/[,，]/).map(word => word.trim()).filter(word => word);
+            if (filterMode === 'filter') {
+              // 过滤模式
+              keywordMatches = !filterWords.some(word => 
+                segment.text.toLowerCase().includes(word.toLowerCase())
+              );
+            } else {
+              // 选择模式
+              keywordMatches = filterWords.some(word => 
+                segment.text.toLowerCase().includes(word.toLowerCase())
+              );
+            }
+          }
+          
+          return durationMatches && keywordMatches;
+        });
+      default: // 'all'
+        return durationFilteredSegments;
+    }
+  })();
   
   // 格式化时间
   const formatTime = (seconds: number) => {
@@ -155,61 +238,149 @@ export function SegmentsList() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
   
-  // 处理全选/全不选（基于当前Tab）
+  // 处理全选/全不选
   const handleSelectAll = () => {
     if (selectAll) {
       // 取消全选
-      if (activeTab === 'selected') {
-        // 在已选择标签页中：取消所有已选择
-        clearSelectedSegments();
-      } else if (activeTab === 'rejected') {
-        // 在已剔除标签页中：取消所有已剔除
-        setRejectedSegments([]);
-      } else {
-        // 在全部标签页中：不做任何操作，因为已经没有选择或剔除的项目
-      }
+      clearSelectedSegments();
     } else {
-      // 全选操作根据当前标签页执行不同操作
-      if (activeTab === 'all') {
-        // 在全部标签页中：将所有过滤后的片段标记为已选择
-        filteredSegments.forEach(segment => {
-          if (!selectedSegments.some(s => s.id === segment.id)) {
-            selectSegment(segment);
-          }
-        });
-      } else if (activeTab === 'rejected') {
-        // 在已剔除标签页中：不做选择操作，避免冲突
-      }
+      // 全选当前显示的段落，同时确保不在rejected列表中的段落才能被选择
+      displaySegments.forEach(segment => {
+        if (!selectedSegments.some(s => s.id === segment.id) && 
+            !rejectedSegments.some(s => s.id === segment.id)) {
+          selectSegment(segment);
+        }
+      });
     }
     setSelectAll(!selectAll);
   };
   
-  // 获取输入框占位符文本
-  const getPlaceholderText = () => {
-    return filterMode === 'filter' 
-      ? "过滤内容(多个关键词用逗号分隔)..." 
-      : "选择包含关键词的片段(逗号分隔)...";
+  // 处理单个选择
+  const handleSelect = (segment: Segment) => {
+    // 检查段落是否已在剔除列表中
+    const isRejected = rejectedSegments.some(s => s.id === segment.id);
+    
+    // 如果已剔除，先从剔除列表中移除
+    if (isRejected) {
+      setRejectedSegments(rejectedSegments.filter(s => s.id !== segment.id));
+    }
+    
+    // 然后处理选择/取消选择
+    if (selectedSegments.some(s => s.id === segment.id)) {
+      unselectSegment(segment.id);
+    } else {
+      selectSegment(segment);
+    }
   };
-
-  // 获取Tab状态文字和图标
-  const getTabInfo = (tabName: 'all' | 'selected' | 'rejected') => {
-    switch(tabName) {
+  
+  // 处理拒绝/剔除段落
+  const handleReject = (segment: Segment) => {
+    if (!rejectedSegments.some(s => s.id === segment.id)) {
+      // 添加到剔除列表
+      setRejectedSegments([...rejectedSegments, segment]);
+      
+      // 如果该段落已选择，则取消选择
+      if (selectedSegments.some(s => s.id === segment.id)) {
+        unselectSegment(segment.id);
+      }
+    }
+  };
+  
+  // 恢复已拒绝的段落
+  const handleRestore = (segment: Segment) => {
+    setRejectedSegments(rejectedSegments.filter(s => s.id !== segment.id));
+  };
+  
+  // 处理最小持续时间变化
+  const handleMinDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(e.target.value);
+    if (value < maxDuration) {
+      setMinDuration(value);
+    }
+  };
+  
+  // 处理最大持续时间变化
+  const handleMaxDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(e.target.value);
+    if (value > minDuration) {
+      setMaxDuration(value);
+    }
+  };
+  
+  // 获取各个标签页的分段数量
+  const getFilteredCounts = () => {
+    // 过滤后的全部片段
+    const allFiltered = durationFilteredSegments.length;
+    
+    // 过滤后的已选择片段
+    const selectedFiltered = durationFilteredSegments.filter(segment => 
+      selectedSegments.some(s => s.id === segment.id)
+    ).length;
+    
+    // 过滤后的已剔除片段
+    const rejectedFiltered = rejectedSegments.filter(segment => {
+      const duration = segment.end - segment.start;
+      const durationMatches = duration >= minDuration && duration <= maxDuration;
+      
+      let keywordMatches = true;
+      if (filterQuery.trim()) {
+        const filterWords = filterQuery.split(/[,，]/).map(word => word.trim()).filter(word => word);
+        if (filterMode === 'filter') {
+          keywordMatches = !filterWords.some(word => 
+            segment.text.toLowerCase().includes(word.toLowerCase())
+          );
+        } else {
+          keywordMatches = filterWords.some(word => 
+            segment.text.toLowerCase().includes(word.toLowerCase())
+          );
+        }
+      }
+      
+      return durationMatches && keywordMatches;
+    }).length;
+    
+    return {
+      all: allFiltered,
+      selected: selectedFiltered,
+      rejected: rejectedFiltered,
+      totalAll: segments.length,
+      totalSelected: selectedSegments.length,
+      totalRejected: rejectedSegments.length
+    };
+  };
+  
+  const filteredCounts = getFilteredCounts();
+  
+  // 获取标签页信息
+  const getTabInfo = (tab: 'all' | 'selected' | 'rejected') => {
+    switch (tab) {
       case 'all':
         return { 
-          text: `全部 (${segments.length - selectedSegments.length - rejectedSegments.length})`,
-          icon: <FiCircle className={activeTab === 'all' ? 'text-primary-600' : 'text-gray-400'} />
+          icon: <FiCircle className="text-gray-500" />, 
+          text: `全部 (${filteredCounts.all}/${filteredCounts.totalAll})` 
         };
       case 'selected':
-        return {
-          text: `已选择 (${selectedSegments.length})`,
-          icon: <FiCheck className={activeTab === 'selected' ? 'text-primary-600' : 'text-gray-400'} />
+        return { 
+          icon: <FiCheckCircle className="text-green-500" />, 
+          text: `已选择 (${filteredCounts.selected}/${filteredCounts.totalSelected})` 
         };
       case 'rejected':
-        return {
-          text: `已剔除 (${rejectedSegments.length})`,
-          icon: <FiX className={activeTab === 'rejected' ? 'text-primary-600' : 'text-gray-400'} />
+        return { 
+          icon: <FiX className="text-red-500" />, 
+          text: `已剔除 (${filteredCounts.rejected}/${filteredCounts.totalRejected})` 
         };
     }
+  };
+  
+  // 检查段落状态
+  const getSegmentStatus = (segment: Segment) => {
+    if (selectedSegments.some(s => s.id === segment.id)) {
+      return 'selected';
+    }
+    if (rejectedSegments.some(s => s.id === segment.id)) {
+      return 'rejected';
+    }
+    return 'none';
   };
   
   return (
@@ -219,213 +390,96 @@ export function SegmentsList() {
       </div>
       
       <div className="card-body">
-        <div className="flex flex-wrap items-center gap-3 mb-4">
-          {/* 1. 过滤模式 */}
-          <div className="flex-shrink-0">
-            <select
-              className="px-3 py-2 h-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+        {/* 过滤和控制区域 - 调整为使用Grid布局 */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 mb-4 items-center">
+          {/* 过滤模式选择器 - 占1列 */}
+          <div className="md:col-span-2">
+            <select 
               value={filterMode}
-              onChange={(e) => setFilterMode(e.target.value as 'filter' | 'include')}
+              onChange={(e) => setFilterMode(e.target.value as 'filter' | 'select')}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
             >
               <option value="filter">过滤模式</option>
-              <option value="include">选择模式</option>
+              <option value="select">选择模式</option>
             </select>
           </div>
           
-          {/* 2. 过滤内容 */}
-          <div className="relative flex-grow min-w-[200px]">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              {filterMode === 'filter' ? (
+          {/* 搜索框 - 占5列 */}
+          <div className="md:col-span-5">
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <FiFilter className="text-gray-400" />
-              ) : (
-                <FiCheckSquare className="text-gray-400" />
-              )}
+              </div>
+              <input
+                type="text"
+                placeholder={
+                  filterMode === 'filter' 
+                    ? "过滤内容(多个关键词用逗号分隔)..." 
+                    : "选择包含关键词的段落(多个关键词用逗号分隔)..."
+                }
+                value={filterQuery}
+                onChange={e => setFilterQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              />
             </div>
-            <input
-              type="text"
-              placeholder={getPlaceholderText()}
-              value={filterQuery}
-              onChange={e => setFilterQuery(e.target.value)}
-              className="w-full h-10 pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-            />
           </div>
           
-          {/* 3. 时间区间筛选 */}
-          <div className="flex items-center gap-2 flex-shrink-0">
+          {/* 时间区间筛选 - 占4列 */}
+          <div className="md:col-span-4">
             <div className="flex items-center">
-              <FiClock className="text-gray-500 mr-1" />
-              <span className="text-sm text-gray-700 whitespace-nowrap">时长: {minDuration}-{maxDuration}秒</span>
-            </div>
-            <div className="relative w-52 h-10 flex items-center px-2">
-              {/* 背景轨道 */}
-              <div className="absolute left-2 right-2 h-3 bg-gray-200 rounded-full"></div>
-              
-              {/* 选中区域 */}
-              <div 
-                className="absolute h-3 bg-primary-500 rounded-full"
-                style={{ 
-                  left: `${(minDuration - 1) / 19 * 100}%`, 
-                  right: `${(20 - maxDuration) / 19 * 100}%` 
-                }}
-              ></div>
-              
-              {/* 最小值滑块 */}
-              <input
-                type="range"
-                min="1"
-                max="19"
-                step="1"
-                value={minDuration}
-                onChange={handleMinDurationChange}
-                className="absolute left-2 right-2 h-10 appearance-none bg-transparent pointer-events-none"
-                style={{ 
-                  // 使最小值滑块的上半部分可交互，下半部分不可交互
-                  clipPath: 'inset(0 0 50% 0)',
-                  // 移除WebKit默认样式
-                  WebkitAppearance: 'none'
-                }}
-              />
-              
-              {/* 最大值滑块 */}
-              <input
-                type="range"
-                min="2"
-                max="20"
-                step="1"
-                value={maxDuration}
-                onChange={handleMaxDurationChange}
-                className="absolute left-2 right-2 h-10 appearance-none bg-transparent pointer-events-none"
-                style={{ 
-                  // 使最大值滑块的下半部分可交互，上半部分不可交互
-                  clipPath: 'inset(50% 0 0 0)',
-                  // 移除WebKit默认样式
-                  WebkitAppearance: 'none'
-                }}
-              />
-              
-              {/* 最小值滑块指示器 */}
-              <div 
-                className="absolute w-6 h-6 bg-white border-2 border-primary-600 rounded-full shadow-md transform -translate-x-1/2 z-10 cursor-grab hover:scale-110 transition-transform"
-                style={{ 
-                  left: `${(minDuration - 1) / 19 * 100}%`, 
-                  top: '50%',
-                  marginTop: '-12px'
-                }}
-              >
-                {/* 扩大拖动区域 */}
+              <FiClock className="text-gray-500 mr-1 flex-shrink-0" />
+              <span className="text-sm text-gray-700 whitespace-nowrap mr-2">时长: {minDuration}s-{maxDuration}s</span>
+              <div className="relative w-full h-10 flex items-center" ref={sliderTrackRef}>
+                {/* 背景轨道 */}
+                <div className="absolute left-0 right-0 h-3 bg-gray-200 rounded-full"></div>
+                
+                {/* 选中区域 */}
                 <div 
-                  className="absolute -left-4 -right-4 -top-4 -bottom-4 cursor-grab"
-                  onMouseDown={(e) => {
-                    // 阻止事件冒泡，确保下面的滑块不会同时触发
-                    e.stopPropagation();
-                    
-                    // 设置指示器为活动状态的样式
-                    const handle = e.currentTarget.parentNode as HTMLDivElement;
-                    handle.classList.add('scale-110');
-                    handle.classList.add('cursor-grabbing');
-                    handle.classList.remove('cursor-grab');
-                    
-                    // 监听鼠标移动和释放事件
-                    const handleMouseMove = (moveEvent: MouseEvent) => {
-                      const slider = handle.parentNode as HTMLDivElement;
-                      const rect = slider.getBoundingClientRect();
-                      const offsetX = moveEvent.clientX - rect.left;
-                      const width = rect.width;
-                      const percentage = Math.max(0, Math.min(1, offsetX / width));
-                      
-                      // 计算新的minDuration值
-                      const newValue = Math.max(1, Math.min(maxDuration - 1, Math.round(percentage * 19) + 1));
-                      if (newValue !== minDuration) {
-                        setMinDuration(newValue);
-                      }
-                    };
-                    
-                    const handleMouseUp = () => {
-                      // 移除活动状态样式
-                      handle.classList.remove('cursor-grabbing');
-                      handle.classList.add('cursor-grab');
-                      
-                      // 移除事件监听器
-                      window.removeEventListener('mousemove', handleMouseMove);
-                      window.removeEventListener('mouseup', handleMouseUp);
-                    };
-                    
-                    window.addEventListener('mousemove', handleMouseMove);
-                    window.addEventListener('mouseup', handleMouseUp);
+                  className="absolute h-3 bg-primary-500 rounded-full"
+                  style={{ 
+                    left: `${(minDuration / maxSegmentDuration) * 100}%`, 
+                    right: `${100 - ((maxDuration / maxSegmentDuration) * 100)}%` 
                   }}
                 ></div>
-              </div>
-              
-              {/* 最大值滑块指示器 */}
-              <div 
-                className="absolute w-6 h-6 bg-white border-2 border-primary-600 rounded-full shadow-md transform -translate-x-1/2 z-10 cursor-grab hover:scale-110 transition-transform"
-                style={{ 
-                  left: `${(maxDuration - 1) / 19 * 100}%`, 
-                  top: '50%',
-                  marginTop: '-12px'
-                }}
-              >
-                {/* 扩大拖动区域 */}
+                
+                {/* 最小值滑块指示器 */}
                 <div 
-                  className="absolute -left-4 -right-4 -top-4 -bottom-4 cursor-grab"
-                  onMouseDown={(e) => {
-                    // 阻止事件冒泡
-                    e.stopPropagation();
-                    
-                    // 设置指示器为活动状态的样式
-                    const handle = e.currentTarget.parentNode as HTMLDivElement;
-                    handle.classList.add('scale-110');
-                    handle.classList.add('cursor-grabbing');
-                    handle.classList.remove('cursor-grab');
-                    
-                    // 监听鼠标移动和释放事件
-                    const handleMouseMove = (moveEvent: MouseEvent) => {
-                      const slider = handle.parentNode as HTMLDivElement;
-                      const rect = slider.getBoundingClientRect();
-                      const offsetX = moveEvent.clientX - rect.left;
-                      const width = rect.width;
-                      const percentage = Math.max(0, Math.min(1, offsetX / width));
-                      
-                      // 计算新的maxDuration值
-                      const newValue = Math.max(minDuration + 1, Math.min(20, Math.round(percentage * 19) + 1));
-                      if (newValue !== maxDuration) {
-                        setMaxDuration(newValue);
-                      }
-                    };
-                    
-                    const handleMouseUp = () => {
-                      // 移除活动状态样式
-                      handle.classList.remove('cursor-grabbing');
-                      handle.classList.add('cursor-grab');
-                      
-                      // 移除事件监听器
-                      window.removeEventListener('mousemove', handleMouseMove);
-                      window.removeEventListener('mouseup', handleMouseUp);
-                    };
-                    
-                    window.addEventListener('mousemove', handleMouseMove);
-                    window.addEventListener('mouseup', handleMouseUp);
+                  ref={minSliderRef}
+                  className="absolute w-6 h-6 bg-white border-2 border-primary-600 rounded-full shadow-md transform -translate-x-1/2 z-10 cursor-grab hover:scale-110 transition-transform"
+                  style={{ 
+                    left: `${(minDuration / maxSegmentDuration) * 100}%`, 
+                    top: '50%',
+                    marginTop: '-12px'
                   }}
                 ></div>
-              </div>
-              
-              {/* 刻度标记 */}
-              <div className="absolute left-2 right-2 bottom-0 flex justify-between">
-                <span className="text-[10px] text-gray-400">1s</span>
-                <span className="text-[10px] text-gray-400">20s</span>
+                
+                {/* 最大值滑块指示器 */}
+                <div 
+                  ref={maxSliderRef}
+                  className="absolute w-6 h-6 bg-white border-2 border-primary-600 rounded-full shadow-md transform -translate-x-1/2 z-10 cursor-grab hover:scale-110 transition-transform"
+                  style={{ 
+                    left: `${(maxDuration / maxSegmentDuration) * 100}%`, 
+                    top: '50%',
+                    marginTop: '-12px'
+                  }}
+                ></div>
               </div>
             </div>
           </div>
           
-          {/* 4. 分段信息 */}
-          <div className="flex-shrink-0 ml-auto">
+          {/* 分段信息 - 占1列 */}
+          <div className="md:col-span-1 text-right">
             <p className="text-sm text-gray-600 whitespace-nowrap">
-              共 {segments.length} 个分段，显示 {filteredSegments.length} 个
+              {displaySegments.length}/{
+                activeTab === 'all' ? segments.length :
+                activeTab === 'selected' ? selectedSegments.length :
+                rejectedSegments.length
+              }
             </p>
           </div>
         </div>
         
-        {/* 标签导航 - 移动到过滤选项下方 */}
+        {/* 标签导航 */}
         <div className="flex border-b border-gray-200 mb-4">
           {(['all', 'selected', 'rejected'] as const).map(tab => {
             const tabInfo = getTabInfo(tab);
@@ -488,72 +542,73 @@ export function SegmentsList() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredSegments.length === 0 ? (
+              {displaySegments.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-6 py-4 text-center text-gray-500">
-                    {activeTab === 'all' ? '全部片段已被处理或没有匹配的内容' :
-                     activeTab === 'selected' ? '没有已选择的片段' :
-                     '没有已剔除的片段'}
+                    没有找到匹配的内容
                   </td>
                 </tr>
               ) : (
-                filteredSegments.map(segment => (
-                  <tr 
-                    key={segment.id}
-                    className={
-                      selectedSegments.some(s => s.id === segment.id) 
-                        ? 'bg-primary-50' 
-                        : rejectedSegments.some(s => s.id === segment.id)
-                          ? 'bg-red-50'
-                          : undefined
-                    }
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex space-x-2">
-                        {/* 选择按钮 */}
-                        <button
-                          type="button"
-                          onClick={() => handleSelectSegment(segment)}
-                          className={`text-gray-400 hover:text-primary-600 ${
-                            rejectedSegments.some(s => s.id === segment.id) ? 'opacity-50' : ''
-                          }`}
-                          title="选择"
-                        >
-                          {selectedSegments.some(s => s.id === segment.id) ? (
-                            <FiCheckCircle className="w-5 h-5 text-primary-600" />
+                displaySegments.map(segment => {
+                  const status = getSegmentStatus(segment);
+                  
+                  return (
+                    <tr 
+                      key={segment.id}
+                      className={
+                        status === 'selected' ? 'bg-primary-50' :
+                        status === 'rejected' ? 'bg-red-50' : undefined
+                      }
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center space-x-2">
+                          {activeTab !== 'rejected' ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleSelect(segment)}
+                                className="text-gray-400 hover:text-primary-600"
+                                title={status === 'selected' ? "取消选择" : "选择"}
+                              >
+                                {status === 'selected' ? (
+                                  <FiCheckCircle className="w-5 h-5 text-primary-600" />
+                                ) : (
+                                  <FiCircle className="w-5 h-5" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleReject(segment)}
+                                className={`hover:text-red-600 ${status === 'rejected' ? 'text-red-600' : 'text-gray-400'}`}
+                                title="剔除"
+                              >
+                                <FiX className="w-5 h-5" />
+                              </button>
+                            </>
                           ) : (
-                            <FiCircle className="w-5 h-5" />
+                            <button
+                              type="button"
+                              onClick={() => handleRestore(segment)}
+                              className="text-gray-400 hover:text-green-600"
+                              title="恢复"
+                            >
+                              <FiCheckCircle className="w-5 h-5" />
+                            </button>
                           )}
-                        </button>
-                        
-                        {/* 剔除按钮 */}
-                        <button
-                          type="button"
-                          onClick={() => handleRejectSegment(segment)}
-                          className={`text-gray-400 hover:text-red-600 ${
-                            selectedSegments.some(s => s.id === segment.id) ? 'opacity-50' : ''
-                          }`}
-                          title="剔除"
-                        >
-                          {rejectedSegments.some(s => s.id === segment.id) ? (
-                            <FiXCircle className="w-5 h-5 text-red-600" />
-                          ) : (
-                            <FiXCircle className="w-5 h-5" />
-                          )}
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatTime(segment.start)} - {formatTime(segment.end)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatTime(segment.end - segment.start)}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {segment.text}
-                    </td>
-                  </tr>
-                ))
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {formatTime(segment.start)} - {formatTime(segment.end)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {formatTime(segment.end - segment.start)}
+                      </td>
+                      <td className={`px-6 py-4 text-sm ${status === 'rejected' ? 'text-red-500 line-through' : 'text-gray-900'}`}>
+                        {segment.text}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
