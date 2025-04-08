@@ -9,6 +9,8 @@ class TransactionType(enum.Enum):
     CONSUME = "consume"  # 消费
     GIFT = "gift"      # 赠送
     REGISTER = "register"  # 注册赠送
+    AGENT_CHARGE = "agent_charge"  # 代理划扣给用户
+    AGENT_CONSUME = "agent_consume"  # 代理划扣消费
 
 class TransactionRecord(Base):
     """交易记录模型"""

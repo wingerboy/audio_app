@@ -30,13 +30,13 @@ RUN apt-get update && \
 COPY requirements.txt .
 
 # 安装 Python 依赖
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
+RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout=60 \
+    && pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout=60 \
     # && pip install torch torchvision torchaudio --index-url https://mirrors.aliyun.com/pypi/simple/ \
     # && pip install git+https://github.com/openai/whisper.git -i https://mirrors.aliyun.com/pypi/simple/ \
-    && pip install pydub ffmpeg-python -i https://mirrors.aliyun.com/pypi/simple/ \
+    && pip install pydub ffmpeg-python -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout=60 \
     # 确保安装了阿里云OSS和DashScope依赖
-    && pip install -U oss2 dashscope -i https://mirrors.aliyun.com/pypi/simple/
+    && pip install -U oss2 dashscope -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout=60
 
 # 复制应用代码
 COPY . .

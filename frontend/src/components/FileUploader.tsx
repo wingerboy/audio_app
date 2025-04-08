@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { FiUpload, FiFile, FiCheckCircle, FiAlertCircle } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
@@ -17,22 +17,74 @@ export function FileUploader() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // 开始模拟进度更新
+  const startFakeProgress = useCallback(() => {
+    // 清除可能存在的旧计时器
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+    }
+    
+    setUploadProgress(0);
+    
+    // 创建新的进度更新计时器
+    progressIntervalRef.current = setInterval(() => {
+      setUploadProgress((prevProgress) => {
+        // 模拟非线性进度，开始快，接近100%时变慢
+        if (prevProgress >= 95) {
+          // 在95%以上时，进度变化很小
+          return prevProgress + (Math.random() * 0.3);
+        } else if (prevProgress >= 80) {
+          // 80%-95%之间，进度变化较小
+          return prevProgress + (Math.random() * 0.7);
+        } else if (prevProgress >= 60) {
+          // 60%-80%之间，正常速度
+          return prevProgress + (Math.random() * 1.5);
+        } else {
+          // 0-60%之间，快速增长
+          return prevProgress + (Math.random() * 3);
+        }
+      });
+    }, 200);
+  }, []);
+  
+  // 结束模拟进度更新
+  const stopFakeProgress = useCallback((success: boolean) => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+    
+    // 如果成功，直接设置为100%，否则保持当前进度
+    if (success) {
+      setUploadProgress(100);
+    }
+  }, []);
+  
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+    };
+  }, []);
   
   // 处理文件上传
   const handleUpload = useCallback(async (file: File) => {
     try {
       setUploading(true);
       setUploadError(null);
-      setUploadProgress(0);
       
-      // 设置进度回调
-      const onProgress = (event: ProgressEvent) => {
-        const percent = Math.round((event.loaded * 100) / event.total);
-        setUploadProgress(percent);
-      };
+      // 开始模拟进度
+      startFakeProgress();
       
       // 上传文件
       const response = await apiService.uploadFile(file);
+      
+      // 完成进度
+      stopFakeProgress(true);
       
       // 更新任务状态
       const taskStatus = await apiService.getTaskStatus(response.task_id);
@@ -46,10 +98,11 @@ export function FileUploader() {
     } catch (error) {
       console.error('文件上传失败:', error);
       setUploadError('文件上传失败，请重试。');
+      stopFakeProgress(false);
     } finally {
       setUploading(false);
     }
-  }, [setCurrentTask, setCurrentStep]);
+  }, [setCurrentTask, setCurrentStep, startFakeProgress, stopFakeProgress]);
   
   // 配置文件上传区域
   const { 
@@ -128,14 +181,24 @@ export function FileUploader() {
             
             {uploading && (
               <div className="w-full max-w-md">
-                <p className="mb-2 font-medium text-gray-800 dark:text-gray-200">正在上传...</p>
-                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+                <p className="mb-2 font-medium text-gray-800 dark:text-gray-200">
+                  正在上传 {file?.name}...
+                </p>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
                   <div
-                    className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full"
-                    style={{ width: `${uploadProgress}%` }}
+                    className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${Math.min(uploadProgress, 100)}%` }}
                   ></div>
                 </div>
-                <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">{uploadProgress}%</p>
+                <div className="mt-2 flex justify-between items-center text-sm text-gray-600 dark:text-gray-400">
+                  <span>{Math.min(Math.round(uploadProgress), 100)}%</span>
+                  <span>{formatFileSize(file?.size || 0)}</span>
+                </div>
+                <p className="mt-3 text-xs text-gray-500 dark:text-gray-500">
+                  {uploadProgress < 30 ? "准备文件..." : 
+                   uploadProgress < 60 ? "上传中..." : 
+                   uploadProgress < 90 ? "处理文件..." : "即将完成..."}
+                </p>
               </div>
             )}
           </div>

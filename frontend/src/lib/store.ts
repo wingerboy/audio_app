@@ -160,7 +160,7 @@ export const useAppStore = create<AppState>()(
       unselectOutputFile: (fileId) => set((state) => ({
         selectedOutputFiles: state.selectedOutputFiles.filter(f => f.id !== fileId)
       })),
-      clearSelectedOutputfiles: () => set({ selectedOutputFiles: [] }),
+      clearSelectedOutputFiles: () => set({ selectedOutputFiles: [] }),
       
       // 设置
       settings: {
@@ -269,7 +269,9 @@ export const useAppStore = create<AppState>()(
                 ...state.auth,
                 user: {
                   ...state.auth.user,
-                  is_admin: true
+                  is_admin: true,
+                  role: 1,  // ROLE_ADMIN
+                  role_name: "管理员"
                 }
               }
             };
@@ -304,6 +306,12 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         settings: state.settings,
         auth: state.auth, // 持久化认证信息
+        currentTask: state.currentTask,  // 保存当前任务状态
+        segments: state.segments,        // 保存分析后的段落
+        selectedSegments: state.selectedSegments, // 保存选择的段落
+        uiState: {
+          currentStep: state.uiState.currentStep,
+        },
       }),
     }
   )

@@ -9,6 +9,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pydub import AudioSegment
 from src.utils.logging_config import LoggingConfig
 from ..temp.manager import TempFileManager
+import threading
+from concurrent.futures import as_completed
+
+# 添加PyAV导入
+try:
+    import av
+    PYAV_AVAILABLE = True
+except ImportError:
+    PYAV_AVAILABLE = False
 
 class SplitOptions:
     """音频分割选项"""
@@ -55,15 +64,24 @@ class SegmentOptions:
 class AudioSplitter:
     """音频分割器，负责音频文件的智能分割"""
     
-    def __init__(self, max_workers=2):
+    def __init__(self, max_workers=None):
         """
         初始化音频分割器
         
         Args:
-            max_workers: 最大并行工作线程数
+            max_workers: 最大并行工作线程数（默认为CPU核心数-1，最小为2）
         """
         self.logger = LoggingConfig.get_logger(__name__)
-        self.max_workers = max_workers
+        
+        # 设置最大线程数，默认为CPU核心数-1（至少为2）
+        if max_workers is None:
+            import os
+            cpu_count = os.cpu_count() or 4  # 如果获取失败，默认为4
+            self.max_workers = max(2, cpu_count - 1)  # 至少为2
+        else:
+            self.max_workers = max(2, max_workers)  # 确保至少为2
+        
+        self.logger.info(f"初始化音频分割器: 最大线程数={self.max_workers}")
     
     def prepare_segments(self, segments, options=None):
         """
@@ -317,9 +335,213 @@ class AudioSplitter:
             self.logger.exception(f"处理分段 {index+1} 时出错: {str(e)}")
             return None
     
+    def _process_segment_with_pyav(self, audio_path, segment, index, output_dir, output_format, bitrate, total_segments):
+        """
+        使用PyAV处理单个音频片段
+        
+        Args:
+            audio_path: 音频文件路径
+            segment: 分段信息
+            index: 分段索引
+            output_dir: 输出目录
+            output_format: 输出格式
+            bitrate: 比特率
+            total_segments: 分段总数
+            
+        Returns:
+            tuple: (索引, 输出文件路径) 或 None（如果失败）
+        """
+        try:
+            start_sec = segment["start"]
+            end_sec = segment["end"]
+            duration = end_sec - start_sec
+            
+            # 创建文件名
+            start_time_str = time.strftime('%H-%M-%S', time.gmtime(start_sec))
+            
+            # 处理文本
+            text = segment.get("text", "").strip()
+            if len(text) > 30:
+                text = text[:27] + "..."
+            
+            # 清理文件名
+            text = "".join(c for c in text if c.isalnum() or c in " .,;-_()[]{}").strip()
+            if not text:
+                text = "segment"
+            
+            filename = f"{index+1:03d}_{start_time_str}_{int(duration)}s_{text}.{output_format}"
+            output_path = os.path.join(output_dir, filename)
+            
+            self.logger.debug(f"使用PyAV处理分段 {index+1}: {start_sec}s - {end_sec}s")
+            
+            # 打开输入文件
+            input_container = av.open(audio_path)
+            
+            # 创建输出容器
+            output_container = av.open(output_path, mode='w')
+            
+            # 找到输入文件中的音频流
+            audio_input_stream = next((s for s in input_container.streams if s.type == 'audio'), None)
+            if audio_input_stream is None:
+                raise ValueError("找不到音频流")
+            
+            # 设置输出格式和编码器
+            if output_format == "mp3":
+                audio_stream = output_container.add_stream('mp3', rate=audio_input_stream.sample_rate)
+                audio_stream.bit_rate = 192000  # Equivalent to q:a 2
+            elif output_format == "wav":
+                audio_stream = output_container.add_stream('pcm_s16le', rate=audio_input_stream.sample_rate) 
+            elif output_format == "ogg":
+                audio_stream = output_container.add_stream('libvorbis', rate=audio_input_stream.sample_rate)
+                audio_stream.bit_rate = 128000  # Equivalent to q:a 4
+            elif output_format == "flac":
+                audio_stream = output_container.add_stream('flac', rate=audio_input_stream.sample_rate)
+            else:
+                # 默认使用AAC
+                audio_stream = output_container.add_stream('aac', rate=audio_input_stream.sample_rate)
+                if isinstance(bitrate, str) and 'k' in bitrate:
+                    audio_stream.bit_rate = int(bitrate.replace('k', '000'))
+                else:
+                    audio_stream.bit_rate = 128000  # 默认128kbps
+            
+            # 计算片段的起始和结束时间点（以时间基为单位）
+            timebase = audio_input_stream.time_base
+            start_pts = int(start_sec / timebase)
+            end_pts = int(end_sec / timebase)
+            
+            # 设置采样率等格式
+            if hasattr(audio_stream, 'frame_size') and audio_stream.frame_size == 0:
+                audio_stream.frame_size = 1024
+            
+            # 设置seek位置
+            try:
+                # 尝试不同的seek方法，某些文件格式可能需要不同的seek方法
+                input_container.seek(int(start_sec * 1000000))  # 微秒单位
+            except Exception as e:
+                self.logger.warning(f"使用微秒seek失败，尝试使用时间戳: {str(e)}")
+                try:
+                    # 尝试使用时间戳seek
+                    input_container.seek(int(start_sec * audio_input_stream.time_base.denominator), stream=audio_input_stream)
+                except Exception as e2:
+                    self.logger.warning(f"使用时间戳seek也失败，使用帧跳过方式: {str(e2)}")
+                    # 如果都失败，回退到FFmpeg
+                    raise ValueError("PyAV无法正确seek，将使用FFmpeg处理")
+            
+            # 处理每一帧
+            for frame in input_container.decode(audio=0):
+                # 计算帧的时间点
+                frame_time = frame.pts * frame.time_base
+                
+                # 检查是否超出了片段结束时间
+                if frame_time > end_sec:
+                    break
+                
+                # 编码并写入输出帧
+                for packet in audio_stream.encode(frame):
+                    output_container.mux(packet)
+            
+            # Flush编码器
+            for packet in audio_stream.encode(None):
+                output_container.mux(packet)
+                
+            # 关闭容器
+            output_container.close()
+            input_container.close()
+            
+            self.logger.debug(f"已处理分段 {index+1}/{total_segments}: {start_time_str}, 长度={duration:.1f}秒")
+            
+            # 验证输出文件是否创建成功
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return (index, output_path)
+            else:
+                self.logger.warning(f"PyAV生成的文件无效或为空: {output_path}")
+                return None
+            
+        except Exception as e:
+            self.logger.exception(f"PyAV处理分段 {index+1} 时出错: {str(e)}")
+            return None
+
+    def _process_segment_with_ffmpeg(self, audio_path, segment, index, output_dir, output_format, bitrate, total_segments):
+        """
+        使用FFmpeg命令行处理单个音频片段
+        
+        Args:
+            audio_path: 音频文件路径
+            segment: 分段信息
+            index: 分段索引
+            output_dir: 输出目录
+            output_format: 输出格式
+            bitrate: 比特率
+            total_segments: 分段总数
+            
+        Returns:
+            tuple: (索引, 输出文件路径) 或 None（如果失败）
+        """
+        try:
+            start_sec = segment["start"]
+            end_sec = segment["end"]
+            duration = end_sec - start_sec
+            
+            # 创建文件名
+            start_time_str = time.strftime('%H-%M-%S', time.gmtime(start_sec))
+            
+            # 处理文本
+            text = segment.get("text", "").strip()
+            if len(text) > 30:
+                text = text[:27] + "..."
+            
+            # 清理文件名
+            text = "".join(c for c in text if c.isalnum() or c in " .,;-_()[]{}").strip()
+            if not text:
+                text = "segment"
+            
+            filename = f"{index+1:03d}_{start_time_str}_{int(duration)}s_{text}.{output_format}"
+            output_path = os.path.join(output_dir, filename)
+            
+            # 针对不同格式选择合适的编码器
+            if output_format == "mp3":
+                codec = ["-c:a", "libmp3lame", "-q:a", "2"]
+            elif output_format == "wav":
+                codec = ["-c:a", "pcm_s16le"]
+            elif output_format == "ogg":
+                codec = ["-c:a", "libvorbis", "-q:a", "4"]
+            elif output_format == "flac":
+                codec = ["-c:a", "flac"]
+            else:
+                # 默认使用AAC
+                codec = ["-c:a", "aac", "-b:a", bitrate]
+            
+            # 构建FFmpeg命令
+            cmd = [
+                "ffmpeg", "-i", audio_path,
+                "-ss", str(start_sec),
+                "-t", str(duration)
+            ] + codec + [
+                "-ar", "44100",  # 采样率
+                "-y",  # 覆盖输出文件
+                "-loglevel", "error",  # 减少FFmpeg日志输出
+                output_path
+            ]
+            
+            self.logger.debug(f"执行FFmpeg命令: {' '.join(cmd)}")
+            
+            # 执行命令
+            process = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if process.returncode == 0 and os.path.exists(output_path):
+                self.logger.debug(f"已处理分段 {index+1}/{total_segments}: {start_time_str}, 长度={duration:.1f}秒")
+                return (index, output_path)
+            else:
+                self.logger.error(f"处理分段 {index+1} 失败: {process.stderr}")
+                return None
+            
+        except Exception as e:
+            self.logger.exception(f"处理分段 {index+1} 时出错: {str(e)}")
+            return None
+    
     def _split_large_audio(self, audio_path, segments, output_dir, output_format, bitrate, progress_callback=None):
         """
-        使用FFmpeg直接处理大型音频文件，避免内存问题
+        使用直接处理方式处理大型音频文件，避免内存问题
         
         Args:
             audio_path: 音频文件路径
@@ -332,77 +554,58 @@ class AudioSplitter:
         Returns:
             list: 输出文件路径列表
         """
-        self.logger.info("使用FFmpeg直接处理大文件")
+        use_pyav = PYAV_AVAILABLE
+        processing_method = "PyAV" if use_pyav else "FFmpeg"
+        self.logger.info(f"使用{processing_method}直接处理大文件 (并行处理, {self.max_workers}线程)")
+        
         output_files = []
-        
-        # 处理每个片段
+        output_files_lock = threading.Lock()  # 用于安全更新输出文件列表
+        processed_count = [0]  # 使用列表以便在闭包中修改
         total_segments = len(segments)
-        for i, segment in enumerate(segments):
-            try:
-                start_sec = segment["start"]
-                end_sec = segment["end"]
-                duration = end_sec - start_sec
-                
-                # 创建文件名
-                start_time_str = time.strftime('%H-%M-%S', time.gmtime(start_sec))
-                
-                # 处理文本
-                text = segment.get("text", "").strip()
-                if len(text) > 30:
-                    text = text[:27] + "..."
-                
-                # 清理文件名
-                text = "".join(c for c in text if c.isalnum() or c in " .,;-_()[]{}").strip()
-                if not text:
-                    text = "segment"
-                
-                filename = f"{i+1:03d}_{start_time_str}_{int(duration)}s_{text}.{output_format}"
-                output_path = os.path.join(output_dir, filename)
-                
-                # 针对不同格式选择合适的编码器
-                if output_format == "mp3":
-                    codec = ["-c:a", "libmp3lame", "-q:a", "2"]
-                elif output_format == "wav":
-                    codec = ["-c:a", "pcm_s16le"]
-                elif output_format == "ogg":
-                    codec = ["-c:a", "libvorbis", "-q:a", "4"]
-                elif output_format == "flac":
-                    codec = ["-c:a", "flac"]
-                else:
-                    # 默认使用AAC
-                    codec = ["-c:a", "aac", "-b:a", bitrate]
-                
-                # 构建FFmpeg命令
-                cmd = [
-                    "ffmpeg", "-i", audio_path,
-                    "-ss", str(start_sec),
-                    "-t", str(duration)
-                ] + codec + [
-                    "-ar", "44100",  # 采样率
-                    "-y",  # 覆盖输出文件
-                    output_path
-                ]
-                
-                self.logger.debug(f"执行FFmpeg命令: {' '.join(cmd)}")
-                
-                # 执行命令
-                process = subprocess.run(cmd, capture_output=True, text=True)
-                
-                if process.returncode == 0 and os.path.exists(output_path):
-                    output_files.append(output_path)
-                    self.logger.debug(f"已处理分段 {i+1}/{total_segments}: {start_time_str}, 长度={duration:.1f}秒")
-                else:
-                    self.logger.error(f"处理分段 {i+1} 失败: {process.stderr}")
-                
-                # 更新进度
-                if progress_callback:
-                    progress = int((i+1) * 100 / total_segments)
-                    progress_callback(f"分割大文件 ({i+1}/{total_segments})", progress)
-                
-            except Exception as e:
-                self.logger.exception(f"处理大文件分段 {i+1} 时出错: {str(e)}")
         
-        # 排序输出文件
+        def process_segment(i, segment):
+            # 首先尝试使用PyAV处理
+            result = None
+            if use_pyav:
+                try:
+                    result = self._process_segment_with_pyav(
+                        audio_path, segment, i, output_dir, output_format, bitrate, total_segments
+                    )
+                except Exception as e:
+                    self.logger.warning(f"使用PyAV处理分段 {i+1} 失败，回退到FFmpeg: {str(e)}")
+                    result = None
+            
+            # 如果PyAV失败或不可用，回退到FFmpeg
+            if result is None:
+                result = self._process_segment_with_ffmpeg(
+                    audio_path, segment, i, output_dir, output_format, bitrate, total_segments
+                )
+            
+            # 更新处理计数并报告进度
+            with output_files_lock:
+                processed_count[0] += 1
+                if progress_callback:
+                    progress = int(processed_count[0] * 100 / total_segments)
+                    progress_callback(f"分割大文件 ({processed_count[0]}/{total_segments})", progress)
+            
+            return result
+        
+        # 使用线程池并行处理分段
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # 提交所有任务
+            future_to_segment = {executor.submit(process_segment, i, segment): i for i, segment in enumerate(segments)}
+            
+            # 处理结果
+            for future in as_completed(future_to_segment):
+                result = future.result()
+                if result:
+                    idx, path = result
+                    with output_files_lock:
+                        output_files.append((idx, path))
+        
+        # 按索引排序输出文件并只返回路径部分
         output_files.sort()
-        self.logger.info(f"大文件分割完成，共生成 {len(output_files)} 个文件")
-        return output_files 
+        sorted_paths = [path for _, path in output_files]
+        
+        self.logger.info(f"大文件分割完成，共生成 {len(sorted_paths)} 个文件")
+        return sorted_paths 

@@ -145,7 +145,7 @@ class DashScopeTranscriber(BaseTranscriber):
             auth = oss2.ProviderAuthV4(creds)
             
             # 创建Bucket对象
-            bucket = oss2.Bucket(auth, self.endpoint, self.bucket_name, region=self.region)
+            bucket = oss2.Bucket(auth, self.endpoint, self.bucket_name, connect_timeout=60, region=self.region)
             
             # 生成唯一的对象名
             object_name = f"audio_{uuid.uuid4().hex}_{os.path.basename(audio_path)}"

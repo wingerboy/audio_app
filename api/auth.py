@@ -73,7 +73,6 @@ def login_required(func):
                 'message': '请先登录',
                 'code': 'login_required'
             }), 401
-            # }), 200
     return decorated_function
 
 def admin_required(func):
@@ -91,7 +90,7 @@ def admin_required(func):
             #     user = session.query(User).filter_by(id=user_id).first()
             user = db_session.query(User).filter(User.id == user_id).first()
 
-            if not user or not user.is_admin:
+            if not user or not user.is_admin():
                 logger.warning(f"用户 {user_id} 尝试访问管理员资源但无权限")
                 return jsonify({
                     'status': 'error',
@@ -107,7 +106,6 @@ def admin_required(func):
                 'message': '请先登录',
                 'code': 'login_required'
             }), 401
-            # }), 200
     return decorated_function
 
 def generate_token(user_id):
@@ -145,7 +143,9 @@ def get_current_user():
             'id': user.id,
             'username': user.username,
             'email': user.email,
-            'is_admin': user.is_admin,
+            'is_admin': user.is_admin(),
+            'role': user.role,
+            'role_name': user.get_role_name(),
             'balance': float(user.balance) if user.balance else 0.0,
             'total_charged': float(user.total_charged) if user.total_charged else 0.0,
             'total_consumed': float(user.total_consumed) if user.total_consumed else 0.0,
@@ -153,4 +153,68 @@ def get_current_user():
         }
     except Exception as e:
         logger.warning(f"获取当前用户失败: {str(e)}")
-        return None 
+        return None
+
+def agent_required(func):
+    """
+    需要代理权限装饰器（允许代理或管理员访问）
+    """
+    @wraps(func)
+    def decorated_function(*args, **kwargs):
+        try:
+            verify_jwt_in_request()
+            user_id = get_jwt_identity()
+
+            # 检查用户是否为代理或管理员
+            with get_db_session() as session:
+                user = session.query(User).filter_by(id=user_id).first()
+
+                if not user or (not user.is_agent() and not user.is_admin() and not user.is_senior_agent()):
+                    logger.warning(f"用户 {user_id} 尝试访问代理资源但无权限")
+                    return jsonify({
+                        'status': 'error',
+                        'message': '需要代理权限',
+                        'code': 'agent_required'
+                    }), 403
+
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.warning(f"认证失败: {str(e)}")
+            return jsonify({
+                'status': 'error',
+                'message': '请先登录',
+                'code': 'login_required'
+            }), 401
+    return decorated_function
+
+def admin_or_agent_required(func):
+    """
+    需要管理员或任何级别代理权限的装饰器
+    """
+    @wraps(func)
+    def decorated_function(*args, **kwargs):
+        try:
+            verify_jwt_in_request()
+            user_id = get_jwt_identity()
+
+            # 检查用户是否为管理员或代理
+            with get_db_session() as session:
+                user = session.query(User).filter_by(id=user_id).first()
+
+                if not user or user.role == 0:  # 普通用户无权限
+                    logger.warning(f"用户 {user_id} 尝试访问管理或代理资源但无权限")
+                    return jsonify({
+                        'status': 'error',
+                        'message': '需要管理员或代理权限',
+                        'code': 'admin_or_agent_required'
+                    }), 403
+
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.warning(f"认证失败: {str(e)}")
+            return jsonify({
+                'status': 'error',
+                'message': '请先登录',
+                'code': 'login_required'
+            }), 401
+    return decorated_function

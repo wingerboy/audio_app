@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { FiUser, FiLogOut, FiSettings, FiMenu, FiX } from 'react-icons/fi';
+import { FiUser, FiLogOut, FiSettings, FiMenu, FiX, FiDollarSign } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import { apiService } from '@/lib/api';
+import { hasSpecialRole, hasAdminAccess, isAgent } from "@/lib/roleUtils";  // 导入角色工具函数
 
 export function Navbar() {
   const router = useRouter();
@@ -102,8 +103,8 @@ export function Navbar() {
                       <FiSettings className="mr-2" /> 设置
                     </Link>
                     
-                    {/* 管理员充值选项 - 仅对管理员显示 */}
-                    {auth.user?.is_admin && (
+                    {/* 管理员充值选项 - 仅对管理员和代理显示 */}
+                    {hasAdminAccess(auth.user) && (
                       <Link
                         href="/admin/charge"
                         className="block px-4 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center"
@@ -113,6 +114,18 @@ export function Navbar() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                         管理员充值
+                      </Link>
+                    )}
+                    
+                    {/* 代理划扣选项 - 仅对代理显示 */}
+                    {isAgent(auth.user) && (
+                      <Link
+                        href="/agent/charge"
+                        className="block px-4 py-2 text-sm text-green-600 dark:text-green-400 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center"
+                        onClick={() => setIsUserMenuOpen(false)}
+                      >
+                        <FiDollarSign className="mr-2" />
+                        代理划扣
                       </Link>
                     )}
                     
@@ -165,7 +178,7 @@ export function Navbar() {
                 </Link>
                 
                 {/* 移动端管理员充值选项 */}
-                {auth.user?.is_admin && (
+                {hasAdminAccess(auth.user) && (
                   <Link
                     href="/admin/charge"
                     className="block px-4 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center"
@@ -175,6 +188,18 @@ export function Navbar() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
                     管理员充值
+                  </Link>
+                )}
+                
+                {/* 移动端代理划扣选项 */}
+                {isAgent(auth.user) && (
+                  <Link
+                    href="/agent/charge"
+                    className="block px-4 py-2 text-sm text-green-600 dark:text-green-400 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    <FiDollarSign className="mr-2" />
+                    代理划扣
                   </Link>
                 )}
                 

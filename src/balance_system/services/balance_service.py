@@ -295,4 +295,106 @@ class BalanceService:
         except SQLAlchemyError as e:
             db_session.rollback()
             logger.error(f"处理过期点数失败: {e}")
+            raise
+    
+    @staticmethod
+    def record_agent_charge(agent_id: str, user_id: str, amount: float, description: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """记录代理为用户充值（代理划扣）
+        
+        Args:
+            agent_id: 代理用户ID
+            user_id: 普通用户ID
+            amount: 充值金额
+            description: 充值描述
+            
+        Returns:
+            Tuple: (代理交易记录, 用户交易记录)
+        """
+        if amount <= 0:
+            raise ValueError("充值金额必须大于0")
+        
+        try:
+            # 获取代理用户
+            agent = db_session.query(User).filter(User.id == agent_id).first()
+            if not agent:
+                raise ValueError("代理用户不存在")
+            
+            # 获取普通用户
+            user = db_session.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise ValueError("普通用户不存在")
+            
+            # 检查代理余额是否足够
+            decimal_amount = Decimal(str(amount))
+            if agent.balance < decimal_amount:
+                raise ValueError("代理余额不足")
+            
+            # 1. 处理代理用户余额 - 扣除
+            agent.balance -= decimal_amount
+            agent.total_consumed += decimal_amount
+            
+            # 同时更新代理用户的UserBalance表
+            agent_balance = db_session.query(UserBalance).filter(UserBalance.user_id == agent_id).first()
+            if agent_balance:
+                agent_balance.balance -= decimal_amount
+                agent_balance.total_consumed += decimal_amount
+            
+            # 2. 处理普通用户余额 - 增加
+            user.balance += decimal_amount
+            user.total_charged += decimal_amount
+            
+            # 同时更新普通用户的UserBalance表
+            user_balance = db_session.query(UserBalance).filter(UserBalance.user_id == user_id).first()
+            if user_balance:
+                user_balance.balance += decimal_amount
+                user_balance.total_charged += decimal_amount
+            else:
+                # 如果不存在，则创建新记录
+                user_balance = UserBalance(
+                    user_id=user_id,
+                    balance=user.balance,
+                    total_charged=user.total_charged,
+                    total_consumed=user.total_consumed
+                )
+                db_session.add(user_balance)
+            
+            # 为代理用户创建消费交易记录
+            agent_description = description or f"给用户 {user.username} ({user.email}) 充值 {amount} 点"
+            agent_transaction = TransactionRecord(
+                user_id=agent_id,
+                amount=-decimal_amount,  # 消费为负数
+                balance=agent.balance,
+                transaction_type=TransactionType.AGENT_CONSUME,
+                description=agent_description,
+                operator=agent.username
+            )
+            
+            # 为普通用户创建充值交易记录
+            user_description = description or f"代理 {agent.username} 充值 {amount} 点"
+            user_transaction = TransactionRecord(
+                user_id=user_id,
+                amount=decimal_amount,
+                balance=user.balance,
+                transaction_type=TransactionType.AGENT_CHARGE,
+                description=user_description,
+                operator=agent.username
+            )
+            
+            db_session.add(agent_transaction)
+            db_session.add(user_transaction)
+            db_session.commit()
+            
+            # 刷新数据
+            db_session.refresh(agent)
+            db_session.refresh(user)
+            db_session.refresh(agent_transaction)
+            db_session.refresh(user_transaction)
+            
+            return (
+                agent_transaction.to_dict(),
+                user_transaction.to_dict()
+            )
+        except SQLAlchemyError as e:
+            db_session.rollback()
+            logger.error(f"代理充值失败: {e}")
             raise 

@@ -73,6 +73,19 @@ export function ModelSelector() {
       } else {
         setError('音频分析失败，请重试。');
       }
+      
+      // 将当前任务标记为分析失败，但保留其他信息
+      if (currentTask) {
+        const updatedTask = {
+          ...currentTask,
+          status: 'failed',
+          message: '分析失败',
+          failedAtStep: 'uploaded', // 标记失败的步骤
+          lastSuccessfulStep: 'uploaded', // 记录最后成功的步骤
+          errorDetails: error.message || '音频分析失败'
+        };
+        useAppStore.getState().setCurrentTask(updatedTask);
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -107,6 +120,19 @@ export function ModelSelector() {
           </div>
         )}
         
+        {/* 重试按钮 - 仅在任务失败且当前步骤是上传后的分析步骤时显示 */}
+        {currentTask?.status === 'failed' && currentTask?.lastSuccessfulStep === 'uploaded' && (
+          <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 p-3 rounded mb-4">
+            <p className="mb-2">上次分析失败，您可以重试。</p>
+            <button
+              onClick={handleAnalyze}
+              className="bg-yellow-500 hover:bg-yellow-600 text-white font-medium py-2 px-4 rounded-md"
+            >
+              重试分析
+            </button>
+          </div>
+        )}
+        
         <button
           type="button"
           onClick={handleAnalyze}
@@ -119,7 +145,7 @@ export function ModelSelector() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
-              分析中...
+              处理中...
             </>
           ) : (
             <>
