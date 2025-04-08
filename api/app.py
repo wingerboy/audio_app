@@ -7,6 +7,8 @@ import uuid
 import json
 import time
 import traceback
+from datetime import timedelta
+
 from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 import logging
@@ -17,6 +19,9 @@ from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_tok
 from dotenv import load_dotenv
 from api.auth import setup_jwt, login_required, admin_required, get_current_user, agent_required, admin_or_agent_required
 from typing import Optional, Dict
+
+from src.balance_system.models import User
+from src.balance_system.models.user_task import UserTask
 from src.utils.logging_config import LoggingConfig, RequestContext
 from src.balance_system.models.user import ROLE_USER, ROLE_ADMIN, ROLE_AGENT, ROLE_SENIOR_AGENT
 
@@ -49,7 +54,11 @@ app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 app.config['UPLOAD_FOLDER'] = os.path.join(project_root, 'data', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 1000 * 1024 * 1024  # 最大500MB
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 60 * 60 * 24 * 7  # 7天
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)  # 7天
+# app.config['JWT_TOKEN_LOCATION'] = ["cookies"]
+app.config['JWT_TOKEN_LOCATION'] = ["headers"]
+# app.config["JWT_COOKIE_SECURE"] = False
+# app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 
 # 确保上传目录存在
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -98,9 +107,16 @@ class TaskManager:
     def __init__(self):
         self._tasks = {}
         self.logger = LoggingConfig.get_logger(__name__ + '.TaskManager')
-    
+
     def get_task(self, task_id: str) -> Optional[Dict]:
+        from src.balance_system.db import db_session
+        from src.balance_system.models.user_task import UserTask
         task = self._tasks.get(task_id)
+        if task is None or ("size_mb" not in task):
+            task = db_session.query(UserTask).filter(UserTask.task_no == task_id).first()
+            if task:
+                task = task.to_dict()
+        #
         if task:
             # 设置上下文
             user_id = task.get("user_id")
@@ -115,12 +131,58 @@ class TaskManager:
         # 设置上下文
         user_id = task_data.get("user_id")
         RequestContext.set_context(user_id=user_id, task_id=task_id, operation="set_task")
-        
+
+        from src.balance_system.db import db_session
+
+        # 保存task信息
+        if task_data.get("status") == "uploaded":
+            user_task = UserTask(task_no=task_data.get("id"), source_file_name=task_data.get("filename"), source_file_path=task_data.get("path"), user_id=task_data.get("user_id"),
+                                 status=self.getTaskStatus(task_data.get("status")), source_file_size=round(task_data.get("size_mb"), 2), source_file_duration_minutes=round(task_data.get("audio_duration_minutes"), 2), source_file_duration_seconds=round(task_data.get("audio_duration_seconds"), 2),
+                                 transaction_id=0,audio_path=task_data.get("audio_path"))
+                                 # transaction_id=0, create_time=task_data.get("created_at"), update_time=task_data.get("created_at"))
+            db_session.add(user_task)
+        elif task_data.get("status") == "analyzed":
+            db_session.query(UserTask).filter(UserTask.task_no == task_id).update({"status": self.getTaskStatus(task_data.get("status")), "segments": json.dumps(task_data.get("segments")), "update_time": task_data.get("update_time")})
+        elif task_data.get("status") == "completed":
+            db_session.query(UserTask).filter(UserTask.task_no == task_id).update({"status": self.getTaskStatus(task_data.get("status")), "segments": json.dumps(task_data.get("segments")),
+                                                                   "output_files": json.dumps(task_data.get("output_files")),
+                                                                   "output_dir": task_data.get("output_dir"),
+                                                                   "update_time": task_data.get("update_time")})
+        else:
+            db_session.query(UserTask).filter(UserTask.task_no == task_id).update({"status": self.getTaskStatus(task_data.get("status")), "update_time": task_data.get("update_time")})
+
+        # 保存更新
+        db_session.commit()
+
         if is_new:
             self.logger.info(f"创建新任务: {task_id}, 文件: {task_data.get('filename', 'unknown')}")
         else:
             self.logger.info(f"更新任务: {task_id}, 状态: {task_data.get('status', 'unknown')}")
-    
+
+    def getTaskStatus(self, status: str):
+        if (status == 'uploaded'):
+            return 0
+        elif (status == 'processing'):
+            return 1
+        elif (status == 'analyzed'):
+            return 2
+        elif (status == 'splitting'):
+            return 3
+        elif (status == 'completed'):
+            return 4
+        else:
+            return 5
+            # return 2-已扣费，3-已分割，4-已下载，5-已过期
+            #
+            # 'uploaded' | 'processing' | 'analyzed' | 'splitting' | 'completed' | 'failed';
+            # processing' | 'analyzed' | 'splitting' | 'completed' | 'failed
+            # return 2-已扣费，3-已分割，4-已下载，5-已过期
+            #
+            # 'uploaded' | 'processing' | 'analyzed' | 'splitting' | 'completed' | 'failed';
+
+    def getFileDuration(self, seconds: str, minutes: str):
+        return "{}分钟{}秒".format(minutes, seconds)
+
     def delete_task(self, task_id: str):
         if task_id in self._tasks:
             # 设置上下文
@@ -131,7 +193,16 @@ class TaskManager:
             self.logger.info(f"删除任务: {task_id}")
             del self._tasks[task_id]
     
-    def get_all_tasks(self) -> Dict[str, Dict]:
+    def get_all_tasks(self, user_id: str) -> Dict[str, Dict]:
+        from src.balance_system.db import db_session
+        from src.balance_system.models.user_task import UserTask
+        tasks = db_session.query(UserTask).filter(UserTask.user_id == user_id).all()
+        # tasks = db_session.query(UserTask).filter(UserTask.status < 4).all()
+        if tasks:
+            self._tasks = {}
+            for i in range(len(tasks)):
+                userTask = tasks[i]
+                self._tasks[userTask.task_no] = userTask.to_dict()
         return self._tasks
     
     def get_user_tasks(self, user_id: str) -> Dict[str, Dict]:
@@ -171,7 +242,7 @@ def get_progress_callback(task_id):
         if task:
             user_id = task.get("user_id")
             RequestContext.set_context(user_id=user_id, task_id=task_id, operation="progress_update")
-            
+
             task["status"] = "processing"
             task["progress"] = percent
             task["message"] = message
@@ -191,7 +262,7 @@ def register():
     """注册新用户"""
     try:
         data = request.json
-        
+
         # 验证必要字段
         required_fields = ['username', 'email', 'password']
         for field in required_fields:
@@ -200,19 +271,19 @@ def register():
                     'status': 'error',
                     'message': f'缺少必要字段: {field}'
                 }), 400
-        
+
         # 密码长度验证
         if len(data['password']) < 6:
             return jsonify({
                 'status': 'error',
                 'message': '密码至少需要6个字符'
             }), 400
-        
+
         # 创建用户
         from src.balance_system.models.user import User
         from src.balance_system.db import db_session
         from src.balance_system.services.balance_service import BalanceService
-        
+
         # 检查邮箱是否已存在
         existing_user = db_session.query(User).filter(User.email == data['email']).first()
         if existing_user:
@@ -220,7 +291,7 @@ def register():
                 'status': 'error',
                 'message': '该邮箱已被注册'
             }), 400
-        
+
         # 创建新用户
         new_user = User(
             username=data['username'],
@@ -229,17 +300,17 @@ def register():
             is_active=True,
             role=ROLE_USER  # 使用角色常量替代is_admin=False
         )
-        
+
         db_session.add(new_user)
         db_session.commit()
         db_session.refresh(new_user)
-        
+
         # 记录注册赠送点数
         BalanceService.record_register_balance(new_user.id)
-        
+
         # 生成令牌
         access_token = create_access_token(identity=new_user.id)
-        
+
         return jsonify({
             'status': 'success',
             'message': '注册成功，已赠送50点数，100点=1元',
@@ -269,31 +340,31 @@ def login():
     """用户登录"""
     try:
         data = request.json
-        
+
         # 验证必要字段
         if 'email' not in data or 'password' not in data:
             return jsonify({
                 'status': 'error',
                 'message': '请提供邮箱和密码'
             }), 400
-        
+
         # 认证用户
         from src.balance_system.models.user import User
         from src.balance_system.db import db_session
-        
+
         user = db_session.query(User).filter(User.email == data['email']).first()
         if not user:
             return jsonify({
                 'status': 'error',
                 'message': '账号未注册'
             }), 401
-            
+
         if user.password_hash != data['password']:  # 实际应用中应该使用加密后的密码比较
             return jsonify({
                 'status': 'error',
                 'message': '邮箱或密码错误'
             }), 401
-        
+
         # 生成令牌
         access_token = create_access_token(identity=user.id)
         
@@ -333,14 +404,14 @@ def get_me():
                 'status': 'error',
                 'message': '未找到用户信息'
             }), 404
-        
+
         # 确保user是一个字典
         if not isinstance(user, dict):
             return jsonify({
                 'status': 'error',
                 'message': '用户数据格式错误'
             }), 500
-            
+
         # 返回用户信息
         return jsonify({
             'status': 'success',
@@ -359,30 +430,30 @@ def update_account():
     """更新用户账户信息"""
     try:
         data = request.json
-        
+
         # 获取当前用户
         from src.balance_system.models.user import User
         from src.balance_system.db import db_session
-        
+
         user = get_current_user()
         if not user:
             return jsonify({
                 'status': 'error',
                 'message': '未找到用户信息'
             }), 404
-        
+
         user_id = user['id']
         db_user = db_session.query(User).filter(User.id == user_id).first()
-        
+
         if not db_user:
             return jsonify({
                 'status': 'error',
                 'message': '未找到用户信息'
             }), 404
-        
+
         # 允许更新的字段
         allowed_fields = ['username', 'email', 'password']
-        
+
         # 检查字段是否合法
         for field in data:
             if field not in allowed_fields:
@@ -390,26 +461,26 @@ def update_account():
                     'status': 'error',
                     'message': f'不允许更新字段: {field}'
                 }), 400
-        
+
         # 更新用户信息
         if 'username' in data:
             db_user.username = data['username']
-        
+
         if 'email' in data:
             # 检查邮箱是否已被其他用户使用
             existing_user = db_session.query(User).filter(
-                User.email == data['email'], 
+                User.email == data['email'],
                 User.id != user_id
             ).first()
-            
+
             if existing_user:
                 return jsonify({
                     'status': 'error',
                     'message': '该邮箱已被其他用户使用'
                 }), 400
-            
+
             db_user.email = data['email']
-        
+
         if 'password' in data:
             # 密码长度验证
             if len(data['password']) < 6:
@@ -417,12 +488,12 @@ def update_account():
                     'status': 'error',
                     'message': '密码至少需要6个字符'
                 }), 400
-            
+
             db_user.set_password(data['password'])
-        
+
         # 保存更新
         db_session.commit()
-        
+
         # 返回更新后的用户信息
         return jsonify({
             'status': 'success',
@@ -446,7 +517,7 @@ def update_account():
             'status': 'error',
             'message': f'更新用户信息失败: {str(e)}'
         }), 500
-        
+
 #
 # 系统状态API
 #
@@ -479,25 +550,25 @@ def upload_file():
     """处理文件上传 - 优化版本：使用流式处理和PyAV"""
     if 'file' not in request.files:
         return jsonify({"error": "未找到文件"}), 400
-    
+
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "未选择文件"}), 400
-    
+
     # 获取当前用户
     user = get_current_user()
     if not user:
         return jsonify({"error": "未找到用户信息"}), 404
-    
+
     user_id = user['id']
     username = user['username']
-    
+
     # 记录开始时间（用于性能分析）
     start_time = time.time()
 
     # 生成唯一任务ID
     task_id = str(uuid.uuid4())
-    
+
     # 创建任务目录
     task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
     os.makedirs(task_dir, exist_ok=True)
@@ -505,9 +576,9 @@ def upload_file():
     # 流式保存文件，直接写入任务目录
     filename, file_extension = os.path.splitext(secure_filename(file.filename))
     file_path = os.path.join(task_dir, f"original{file_extension}")
-    
+
     logger.info(f"开始流式保存文件: {file.filename} -> {file_path}")
-    
+
     # 使用流式处理保存文件，避免内存溢出
     chunk_size = 4 * 1024 * 1024  # 4MB 块大小
     file_size = 0
@@ -518,14 +589,14 @@ def upload_file():
                 break
             f.write(chunk)
             file_size += len(chunk)
-    
+
     file_size_mb = file_size / (1024 * 1024)
     logger.info(f"文件保存完成: {file_path}, 大小: {file_size_mb:.2f} MB")
-    
+
     # 音频提取和处理
     audio_path = None
     audio_duration_seconds = 0
-    
+
     try:
         # 检查是否可以使用PyAV
         import av
@@ -534,7 +605,7 @@ def upload_file():
     except ImportError:
         use_pyav = False
         logger.info("PyAV不可用，回退到FFmpeg命令行")
-    
+
     try:
         # 音频处理逻辑
         if file_extension.lower() in ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac']:
@@ -545,41 +616,41 @@ def upload_file():
             # 提取音频
             logger.info(f"从上传的文件中提取音频: {file.filename}")
             audio_path = os.path.join(task_dir, f"audio.wav")
-            
+
             if use_pyav:
                 # 使用PyAV提取音频
                 try:
                     input_container = av.open(file_path)
                     output_container = av.open(audio_path, 'w')
-                    
+
                     # 找到第一个音频流
                     input_stream = next(s for s in input_container.streams if s.type == 'audio')
-                    
+
                     # 创建输出流
                     output_stream = output_container.add_stream(template=input_stream)
-                    
+
                     # 处理帧
                     for frame in input_container.decode(input_stream):
                         for packet in output_stream.encode(frame):
                             output_container.mux(packet)
-                    
+
                     # 刷新所有剩余帧
                     for packet in output_stream.encode(None):
                         output_container.mux(packet)
-                    
+
                     # 关闭容器
                     output_container.close()
                     input_container.close()
-                    
+
                     if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
                         logger.info(f"PyAV 音频提取成功: {audio_path}")
                     else:
                         raise RuntimeError("PyAV提取的音频文件为空")
-                        
+
                 except Exception as e:
                     logger.warning(f"PyAV提取音频失败，回退到FFmpeg: {str(e)}")
                     use_pyav = False
-            
+
             if not use_pyav:
                 # 回退到使用FFmpeg命令行
                 audio_processor = AudioProcessorAdapter()
@@ -596,7 +667,7 @@ def upload_file():
         # 如果提取失败，尝试继续使用原始文件
         if not audio_path or not os.path.exists(audio_path):
             audio_path = file_path
-    
+
     # 获取音频时长 - 优先使用PyAV以提高性能
     if audio_path and os.path.exists(audio_path):
         try:
@@ -611,14 +682,14 @@ def upload_file():
                     else:
                         # 回退：使用总时长除以音频流数量
                         audio_duration_seconds = container.duration / 1000000.0  # 微秒转秒
-                    
+
                     logger.info(f"使用PyAV获取音频时长: {audio_duration_seconds:.2f} 秒")
             else:
                 # 回退到AudioUtils
                 from src.audio.utils import AudioUtils
                 audio_duration_seconds = AudioUtils.get_audio_duration(audio_path)
                 logger.info(f"使用AudioUtils获取音频时长: {audio_duration_seconds:.2f} 秒")
-                
+
             if audio_duration_seconds <= 0:
                 # 如果获取失败，使用基于文件大小的估算
                 logger.warning(f"无法获取准确音频时长，使用基于文件大小的估算")
@@ -637,11 +708,11 @@ def upload_file():
         except Exception:
             # 最终回退：基于文件大小估算
             audio_duration_seconds = file_size_mb * 2
-    
+
     # 计算音频时长（分钟）和预估费用
     audio_duration_minutes = audio_duration_seconds / 60
     estimated_cost = 0
-    
+
     try:
         from src.balance_system.services.pricing_service import PricingService
         
@@ -653,25 +724,25 @@ def upload_file():
         logger.info(f"已计算预估费用: {estimated_cost}")
     except Exception as e:
         logger.warning(f"计算预估费用失败: {str(e)}")
-    
+
     # 记录任务信息
     task_info = {
         "id": task_id,
         "filename": file.filename,
         "path": file_path,
-        "original_file": file_path,
-        "audio_path": audio_path,
+        "original_file": file_path,  # 保存原始文件路径
+        "audio_path": audio_path,    # 保存提取的音频路径
         "size_mb": file_size_mb,
-        "audio_duration_seconds": audio_duration_seconds,
-        "audio_duration_minutes": audio_duration_minutes,
+        "audio_duration_seconds": audio_duration_seconds,  # 添加音频时长信息
+        "audio_duration_minutes": audio_duration_minutes,  # 添加音频时长（分钟）
         "status": "uploaded",
         "progress": 0,
         "message": "文件已上传",
         "created_at": int(time.time()),
-        "user_id": user_id,
-        "estimated_cost": estimated_cost
+        "user_id": user_id,  # 记录用户ID
+        "estimated_cost": estimated_cost  # 记录预估费用
     }
-    
+
     # 保存任务信息
     task_manager.set_task(task_id, task_info)
     
@@ -697,29 +768,30 @@ def analyze_audio():
     data = request.json
     task_id = data.get('task_id')
     model_size = data.get('model_size', 'base')  # 默认使用base模型
-    
-    if not task_id or task_id not in task_manager.get_all_tasks():
-        return jsonify({"error": "无效的任务ID"}), 400
 
     # 手动执行余额检查
     from src.balance_system.services.user_service import UserService
-    
+
     # 获取用户余额
     user = get_current_user()
     if not user:
         return jsonify({"error": "未找到用户信息"}), 404
-    
+
     user_id = user['id']
+    tasks = task_manager.get_all_tasks(user_id)
+    if not task_id or task_id not in tasks:
+        return jsonify({"error": "无效的任务ID"}), 400
+
     user_service = UserService()
     user = user_service.get_user_by_id(user_id)
-    
+
     if not user:
         return jsonify({"error": "用户不存在"}), 404
-        
-    current_balance = float(user.balance)    
+
+    current_balance = float(user.balance)
     task = task_manager.get_task(task_id)
     estimated_cost = task.get('estimated_cost', 0)
-    
+
     # 检查余额是否足够
     if current_balance < estimated_cost:
         error_msg = f"余额不足，当前余额 {current_balance} 点，需要 {estimated_cost} 点"
@@ -730,22 +802,30 @@ def analyze_audio():
             "estimated_cost": estimated_cost
         }), 402
     file_path = task["path"]
-    
+
     # 设置任务上下文
     user_id = task.get("user_id")
     RequestContext.set_context(user_id=user_id, task_id=task_id, operation="analyze_audio")
     logger.info(f"开始分析音频任务: {task_id}, 文件: {os.path.basename(file_path)}")
-    
+
     # 更新任务状态
     task["status"] = "processing"
     task["progress"] = 0
     task["message"] = "开始处理..."
     task["model_size"] = model_size  # 记录使用的模型大小
-    
+
+    # 保存任务信息
+    task_info = {
+        "id": task_id,
+        "status": "processing",
+        "update_time": time.strftime("%Y-%m-%d %X")
+    }
+    task_manager.set_task(task_id, task_info)
+
     try:
         # 创建进度回调
         progress_callback = get_progress_callback(task_id)
-        
+
         # 检查是否已经在上传阶段提取了音频
         audio_path = task.get("audio_path")
         if not audio_path or not os.path.exists(audio_path):
@@ -753,16 +833,24 @@ def analyze_audio():
             progress_callback("提取音频中...", 5)
             audio_processor = AudioProcessorAdapter()
             audio_path = audio_processor.extract_audio(file_path, progress_callback=progress_callback)
-            
+
             if not audio_path:
                 task["status"] = "failed"
                 task["message"] = "音频提取失败"
+
+                # 保存任务信息
+                task_info = {
+                    "id": task_id,
+                    "status": "failed",
+                    "update_time": time.strftime("%Y-%m-%d %X")
+                }
+                task_manager.set_task(task_id, task_info)
                 return jsonify({"error": "音频提取失败"}), 500
-            
+
             # 创建任务专用的持久化目录
             task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
             os.makedirs(task_dir, exist_ok=True)
-            
+
             # 复制提取的音频文件到持久化目录
             filename, ext = os.path.splitext(os.path.basename(audio_path))
             persistent_audio_path = os.path.join(task_dir, f"{filename}{ext}")
@@ -776,20 +864,20 @@ def analyze_audio():
         else:
             progress_callback("使用已提取的音频...", 15)
             logger.info(f"使用上传时已提取的音频: {audio_path}")
-        
+
         # 分析音频
         progress_callback(f"使用云API分析音频内容...", 20)  # 修改提示信息
         audio_analyzer = AIAnalyzerAdapter()
         transcription = audio_analyzer.transcribe_audio(
-            audio_path, 
+            audio_path,
             progress_callback=progress_callback
         )
-        
+
         if not transcription or not transcription.get("segments"):
             task["status"] = "failed"
             task["message"] = "音频分析失败，未能识别出任何内容"
             return jsonify({"error": "音频分析失败，未能识别出任何内容"}), 500
-        
+
         # 保存转录结果
         task["transcription"] = transcription
         task["audio_path"] = audio_path
@@ -797,18 +885,18 @@ def analyze_audio():
         task["status"] = "analyzed"
         task["progress"] = 100
         task["message"] = "分析完成"
-        
+
         # 扣除用户余额
         try:
             from src.balance_system.services.api_usage_service import ApiUsageService
-            
+
             # 获取音频时长（分钟）和文件大小
             audio_duration_minutes = task.get("audio_duration_minutes", 0)
             file_size_mb = task.get("size_mb", 0)
             estimated_cost = task.get("estimated_cost", 0)
             model_size = task.get("model_size", "base")
             original_file = task.get("original_file", "")
-            
+
             # 记录API使用并扣除余额
             usage_result = ApiUsageService.record_api_usage(
                 user_id=user_id,
@@ -819,11 +907,21 @@ def analyze_audio():
                 duration=audio_duration_minutes * 60,  # 转换为秒
                 details=f"analyze file {original_file}"
             )
-            
+
             logger.info(f"成功扣除用户 {user_id} 余额: {estimated_cost} 点")
+
         except Exception as e:
-            logger.error(f"扣除用户余额失败: {str(e)}")
-        
+            logger.error(f"扣除用户余额失败: {str(e)}")#扣0元？
+
+        # 保存任务信息
+        task_info = {
+            "id": task_id,
+            "segments": transcription.get("segments", []),
+            "status": "analyzed",
+            "update_time": time.strftime("%Y-%m-%d %X")
+        }
+        task_manager.set_task(task_id, task_info)
+
         # 返回结果
         return jsonify({
             "task_id": task_id,
@@ -832,7 +930,7 @@ def analyze_audio():
             "segments": transcription.get("segments", []),
             "text": transcription.get("text", "")
         })
-        
+
     except Exception as e:
         logger.exception(f"处理音频时出错: {str(e)}")
         task["status"] = "failed"
@@ -842,77 +940,90 @@ def analyze_audio():
 @app.route('/api/split', methods=['POST'])
 @login_required
 def split_audio():
-    """分割音频"""    
+    """分割音频"""
     data = request.json
     task_id = data.get('task_id')
     segments = data.get('segments', [])
     output_format = data.get('output_format', 'mp3')
     output_quality = data.get('output_quality', 'medium')
-    
-    if not task_id or task_id not in task_manager.get_all_tasks():
+
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "未找到用户信息"}), 404
+
+    user_id = user['id']
+    if not task_id or task_id not in task_manager.get_all_tasks(user_id):
         return jsonify({"error": "无效的任务ID"}), 400
-    
+
     task = task_manager.get_task(task_id)
     if "audio_path" not in task:
         return jsonify({"error": "尚未完成音频分析"}), 400
-    
+
     audio_path = task["audio_path"]
-    
+
     # 设置任务上下文
-    user_id = task.get("user_id")
+    # user_id = task.get("user_id")
     RequestContext.set_context(user_id=user_id, task_id=task_id, operation="split_audio")
     logger.info(f"开始分割音频任务: {task_id}, 分段数: {len(segments)}")
-    
+
     # 余额检查已由装饰器处理
-    
+
     # 更新任务状态
     task["status"] = "splitting"
     task["progress"] = 0
     task["message"] = "开始分割音频..."
-    
+
+    # 保存任务信息
+    task_info = {
+        "id": task_id,
+        "status": "splitting",
+        "update_time": time.strftime("%Y-%m-%d %X")
+    }
+    task_manager.set_task(task_id, task_info)
+
     try:
         # 创建进度回调
         progress_callback = get_progress_callback(task_id)
-        
+
         # 创建任务专用的输出目录
         task_dir = os.path.join(TASKS_DIR, task_id)
         output_dir = os.path.join(task_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"创建输出目录: {output_dir}")
-        
+
         # 检查音频文件是否存在
         if not os.path.exists(audio_path):
             logger.error(f"音频文件不存在: {audio_path}")
-            
+
             # 如果使用的是持久化音频但文件被删除，尝试从原始文件重新提取
             if "original_file" in task and os.path.exists(task["original_file"]):
                 original_file = task["original_file"]
                 logger.info(f"重新从原始文件提取音频: {original_file}")
-                
+
                 # 创建音频处理器
                 audio_processor = AudioProcessorAdapter(auto_cleanup=False)
-                
+
                 # 提取音频
                 temp_audio_path = audio_processor.extract_audio(
-                    original_file, 
+                    original_file,
                     progress_callback=lambda msg, progress: progress_callback(f"重新提取音频: {msg}", progress)
                 )
-                
+
                 if not temp_audio_path:
                     error_msg = "重新提取音频失败"
                     logger.error(error_msg)
                     task["status"] = "failed"
                     task["message"] = error_msg
                     return jsonify({"error": error_msg}), 500
-                
+
                 # 复制到持久化目录
                 filename, ext = os.path.splitext(os.path.basename(temp_audio_path))
                 audio_path = os.path.join(task_dir, f"{filename}{ext}")
-                
+
                 try:
                     shutil.copy2(temp_audio_path, audio_path)
                     logger.info(f"复制音频到持久化路径: {temp_audio_path} -> {audio_path}")
-                    
+
                     # 更新任务中的音频路径
                     task["audio_path"] = audio_path
                     task["persistent_audio"] = audio_path
@@ -927,11 +1038,11 @@ def split_audio():
                 task["status"] = "failed"
                 task["message"] = error_msg
                 return jsonify({"error": error_msg}), 500
-        
+
         # 分割音频
         logger.info(f"开始分割音频: {audio_path} -> {output_dir}, 分段数: {len(segments)}")
         audio_processor = AudioProcessorAdapter(use_disk_processing=True, auto_cleanup=False)
-        
+
         # 执行分割
         output_files = audio_processor.split_audio(
             audio_path,
@@ -941,7 +1052,7 @@ def split_audio():
             quality=output_quality,
             progress_callback=progress_callback
         )
-        
+
         # 检查结果
         if not output_files:
             error_msg = "音频分割失败，未生成输出文件"
@@ -949,14 +1060,14 @@ def split_audio():
             task["status"] = "failed"
             task["message"] = error_msg
             return jsonify({"error": error_msg}), 500
-        
+
         # 保存输出文件路径
         task["output_files"] = output_files
         task["output_dir"] = output_dir
         task["status"] = "completed"
         task["progress"] = 100
         task["message"] = "分割完成"
-        
+
         # 准备文件信息
         files_info = []
         for i, file_path in enumerate(output_files):
@@ -970,9 +1081,20 @@ def split_audio():
                 "size_formatted": f"{file_size/1024/1024:.2f} MB",
                 "download_url": f"/api/download/{task_id}/{i}"
             })
-        
+
         task["files_info"] = files_info
-        
+
+        # 保存任务信息
+        task_info = {
+            "id": task_id,
+            "status": "completed",
+            "segments": segments,
+            "output_files": output_files,
+            "output_dir": output_dir,
+            "update_time": time.strftime("%Y-%m-%d %X")
+        }
+        task_manager.set_task(task_id, task_info)
+
         # 返回结果
         return jsonify({
             "task_id": task_id,
@@ -980,7 +1102,7 @@ def split_audio():
             "message": "分割完成",
             "files": files_info
         })
-        
+
     except Exception as e:
         error_details = f"分割音频时出错: {str(e)}"
         logger.exception(error_details)
@@ -988,7 +1110,7 @@ def split_audio():
         task["message"] = "音频分割失败"
         task["error_details"] = error_details
         return jsonify({
-            "error": "音频分割失败", 
+            "error": "音频分割失败",
             "details": str(e)
         }), 500
 
@@ -998,14 +1120,14 @@ def get_task(task_id):
     task = task_manager.get_task(task_id)
     if not task:
         return jsonify({"error": "任务不存在"}), 404
-    
+
     # 清理敏感或过大的字段
     task_info = {k: v for k, v in task.items() if k not in ["path", "audio_path", "transcription"]}
-    
+
     # 如果有转录结果，添加段落数量
     if "transcription" in task and "segments" in task["transcription"]:
         task_info["segments_count"] = len(task["transcription"]["segments"])
-    
+
     return jsonify(task_info)
 
 @app.route('/api/download/<task_id>/<int:file_index>', methods=['GET'])
@@ -1014,13 +1136,13 @@ def download_file(task_id, file_index):
     task = task_manager.get_task(task_id)
     if not task:
         return jsonify({"error": "任务不存在"}), 404
-    
+
     if "output_files" not in task or not task["output_files"]:
         return jsonify({"error": "没有可下载的文件"}), 404
-    
+
     if file_index < 0 or file_index >= len(task["output_files"]):
         return jsonify({"error": "文件索引无效"}), 404
-    
+
     file_path = task["output_files"][file_index]
     return send_file(file_path, as_attachment=True)
 
@@ -1064,24 +1186,24 @@ def cleanup_task(task_id):
     task = task_manager.get_task(task_id)
     if not task:
         return jsonify({"error": "任务不存在"}), 404
-    
+
     try:
         # 清理文件
         if "path" in task and os.path.exists(task["path"]):
             os.remove(task["path"])
-        
+
         if "audio_path" in task and os.path.exists(task["audio_path"]):
             os.remove(task["audio_path"])
-        
+
         if "output_dir" in task and os.path.exists(task["output_dir"]):
             import shutil
             shutil.rmtree(task["output_dir"])
-        
+
         # 从任务列表中移除
         task_manager.delete_task(task_id)
-        
+
         return jsonify({"status": "success", "message": "任务已清理"})
-    
+
     except Exception as e:
         logger.exception(f"清理任务资源时出错: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -1120,7 +1242,7 @@ def get_user_info():
             'status': 'error',
             'message': '未找到用户信息'
         }), 404
-    
+
     # 返回用户信息
     return jsonify({
         'status': 'success',
@@ -1138,7 +1260,7 @@ def get_user_last_task():
             'status': 'error',
             'message': '未找到用户信息'
         }), 401
-    
+
     # 获取用户的所有任务
     user_tasks = task_manager.get_user_tasks(user_id)
     if not user_tasks:
@@ -1146,30 +1268,30 @@ def get_user_last_task():
             'status': 'error',
             'message': '未找到任务'
         }), 404
-    
+
     # 按创建时间排序，获取最新任务
     last_task = None
     newest_time = 0
-    
+
     for task_id, task in user_tasks.items():
         created_at = task.get('created_at', 0)
         if created_at > newest_time:
             newest_time = created_at
             last_task = task
-    
+
     if not last_task:
         return jsonify({
             'status': 'error',
             'message': '未找到任务'
         }), 404
-    
+
     # 清理敏感或过大的字段
     task_info = {k: v for k, v in last_task.items() if k not in ["path", "audio_path", "transcription"]}
-    
+
     # 如果有转录结果，添加段落数量
     if "transcription" in last_task and "segments" in last_task["transcription"]:
         task_info["segments_count"] = len(last_task["transcription"]["segments"])
-    
+
     return jsonify(task_info)
 
 # 添加请求前钩子，自动设置日志上下文
@@ -1240,14 +1362,14 @@ def update_user_role():
     """更新用户角色 - 仅限管理员操作"""
     try:
         data = request.json
-        
+
         # 验证必要字段
         if 'user_id' not in data or 'role' not in data:
             return jsonify({
                 'status': 'error',
                 'message': '请提供用户ID和角色值'
             }), 400
-        
+
         user_id = data['user_id']
         try:
             role = int(data['role'])
@@ -1256,17 +1378,17 @@ def update_user_role():
                 'status': 'error',
                 'message': '角色值必须是整数'
             }), 400
-        
+
         # 验证角色值
         from src.balance_system.models.user import ROLE_USER, ROLE_ADMIN, ROLE_AGENT, ROLE_SENIOR_AGENT
         valid_roles = [ROLE_USER, ROLE_ADMIN, ROLE_AGENT, ROLE_SENIOR_AGENT]
-        
+
         if role not in valid_roles:
             return jsonify({
                 'status': 'error',
                 'message': f'无效的角色值: {role}'
             }), 400
-        
+
         # 获取当前管理员信息
         admin = get_current_user()
         if not admin:
@@ -1274,27 +1396,27 @@ def update_user_role():
                 'status': 'error',
                 'message': '未找到管理员信息'
             }), 404
-        
+
         from src.balance_system.db import get_db_session
         from src.balance_system.models.user import User
-        
+
         # 检查要修改的用户是否存在
         with get_db_session() as session:
             user = session.query(User).filter_by(id=user_id).first()
-            
+
             if not user:
                 return jsonify({
                     'status': 'error',
                     'message': f'用户 {user_id} 不存在'
                 }), 404
-            
+
             # 更新用户角色
             old_role = user.role
             user.role = role
             session.commit()
-            
+
             logger.info(f"管理员 {admin['username']} 将用户 {user.username} 的角色从 {old_role} 更新为 {role}")
-            
+
             return jsonify({
                 'status': 'success',
                 'message': f'已将用户 {user.username} 的角色更新为 {user.get_role_name()}',
@@ -1320,16 +1442,16 @@ def find_user():
     """通过邮箱查找用户 - 仅限管理员或代理操作"""
     try:
         data = request.json
-        
+
         # 验证必要字段
         if 'email' not in data:
             return jsonify({
                 'status': 'error',
                 'message': '请提供用户邮箱'
             }), 400
-        
+
         email = data['email'].strip()
-        
+
         # 获取当前管理员/代理信息
         admin = get_current_user()
         if not admin:
@@ -1337,22 +1459,22 @@ def find_user():
                 'status': 'error',
                 'message': '未找到管理员/代理信息'
             }), 404
-        
+
         from src.balance_system.db import get_db_session
         from src.balance_system.models.user import User
-        
+
         # 查找用户
         with get_db_session() as session:
             user = session.query(User).filter_by(email=email).first()
-            
+
             if not user:
                 return jsonify({
                     'status': 'error',
                     'message': f'未找到邮箱为 {email} 的用户'
                 }), 404
-            
+
             logger.info(f"{admin['username']} 查询了用户 {user.username} 的信息")
-            
+
             return jsonify({
                 'status': 'success',
                 'message': f'已找到用户',
@@ -1381,16 +1503,16 @@ def agent_charge():
     """代理为普通用户充值（划扣）- 仅限代理操作"""
     try:
         data = request.json
-        
+
         # 验证必要字段
         if 'email' not in data or 'amount' not in data:
             return jsonify({
                 'status': 'error',
                 'message': '请提供用户邮箱和充值金额'
             }), 400
-        
+
         email = data['email'].strip()
-        
+
         try:
             amount = float(data['amount'])
             if amount <= 0:
@@ -1403,7 +1525,7 @@ def agent_charge():
                 'status': 'error',
                 'message': '无效的充值金额'
             }), 400
-        
+
         # 获取当前代理信息
         agent = get_current_user()
         if not agent:
@@ -1411,62 +1533,62 @@ def agent_charge():
                 'status': 'error',
                 'message': '未找到代理信息'
             }), 404
-        
+
         agent_id = agent['id']
-        
+
         from src.balance_system.db import get_db_session
         from src.balance_system.models.user import User
         from src.balance_system.services.balance_service import BalanceService
-        
+
         # 检查代理余额是否足够
         with get_db_session() as session:
             agent_user = session.query(User).filter_by(id=agent_id).first()
-            
+
             if not agent_user:
                 return jsonify({
                     'status': 'error',
                     'message': '代理账户不存在'
                 }), 404
-            
+
             if float(agent_user.balance) < amount:
                 return jsonify({
                     'status': 'error',
                     'message': f'代理余额不足，当前余额: {float(agent_user.balance)} 点'
                 }), 400
-            
+
             # 查找目标用户
             target_user = session.query(User).filter_by(email=email).first()
-            
+
             if not target_user:
                 return jsonify({
                     'status': 'error',
                     'message': f'未找到邮箱为 {email} 的用户'
                 }), 404
-            
+
             # 检查目标用户不是代理或管理员
             if target_user.role > 0:  # 非普通用户
                 return jsonify({
                     'status': 'error',
                     'message': f'不能给其他代理或管理员充值'
                 }), 400
-            
+
             # 执行划扣操作：从代理账户扣除，加到用户账户
             # 1. 从代理账户扣除
             agent_user.balance = float(agent_user.balance) - amount
             agent_user.total_consumed = float(agent_user.total_consumed) + amount
-            
+
             # 2. 给用户账户充值
             target_user.balance = float(target_user.balance) + amount
             target_user.total_charged = float(target_user.total_charged) + amount
-            
+
             # 保存更改
             session.commit()
-            
+
             # 记录交易历史
             BalanceService.record_agent_charge(agent_id, target_user.id, amount)
-            
+
             logger.info(f"代理 {agent['username']} 为用户 {target_user.username} 充值 {amount} 点")
-            
+
             return jsonify({
                 'status': 'success',
                 'message': f'成功为用户 {target_user.username} 充值 {amount} 点',
@@ -1495,17 +1617,17 @@ def get_special_users():
                 'status': 'error',
                 'message': '未找到管理员信息'
             }), 404
-        
+
         from src.balance_system.db import get_db_session
         from src.balance_system.models.user import User, ROLE_USER
-        
+
         # 查询所有特殊用户
         with get_db_session() as session:
             # 查询除了当前用户外的所有非普通用户
             special_users = session.query(User).filter(
                 User.role > ROLE_USER
             ).order_by(User.role.desc()).all()
-            
+
             users_data = []
             for user in special_users:
                 users_data.append({
@@ -1519,9 +1641,9 @@ def get_special_users():
                     'total_consumed': float(user.total_consumed) if user.total_consumed else 0.0,
                     'created_at': user.created_at.isoformat() if user.created_at else None
                 })
-            
+
             logger.info(f"管理员 {admin['username']} 查询了特殊用户列表，共 {len(users_data)} 人")
-            
+
             return jsonify({
                 'status': 'success',
                 'message': '获取特殊用户列表成功',
@@ -1539,4 +1661,5 @@ def get_special_users():
 if __name__ == '__main__':
     # 启动API服务
     port = int(os.getenv('PORT', 5002))
-    app.run(host='0.0.0.0', port=port, debug=True) 
+    # app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
