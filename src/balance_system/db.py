@@ -68,6 +68,7 @@ def init_db():
         from src.balance_system.models.api_usage import ApiUsage
         from src.balance_system.models.pricing_rule import PricingRule
         from src.balance_system.models.charge_package import ChargePackage
+        from src.balance_system.models.user_task import UserTask
         
         # 创建所有表
         Base.metadata.create_all(bind=engine)

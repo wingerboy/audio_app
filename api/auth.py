@@ -13,7 +13,7 @@ from flask_jwt_extended import (
     JWTManager
 )
 from src.balance_system.models.user import User
-from src.balance_system.db import get_db_session
+from src.balance_system.db import get_db_session, db_session
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,8 @@ def admin_required(func):
             # 检查用户是否为管理员
             with get_db_session() as session:
                 user = session.query(User).filter_by(id=user_id).first()
-                
+            # user = db_session.query(User).filter(User.id == user_id).first()
+
                 if not user or not user.is_admin():
                     logger.warning(f"用户 {user_id} 尝试访问管理员资源但无权限")
                     return jsonify({
@@ -133,9 +134,10 @@ def get_current_user():
         # 获取用户信息
         with get_db_session() as session:
             user = session.query(User).filter_by(id=user_id).first()
+        # user = db_session.query(User).filter(User.id == user_id).first()
             if not user:
                 return None
-                
+
             # 返回用户信息字典而不是ORM对象
             return {
                 'id': user.id,
@@ -162,11 +164,11 @@ def agent_required(func):
         try:
             verify_jwt_in_request()
             user_id = get_jwt_identity()
-            
+
             # 检查用户是否为代理或管理员
             with get_db_session() as session:
                 user = session.query(User).filter_by(id=user_id).first()
-                
+
                 if not user or (not user.is_agent() and not user.is_admin() and not user.is_senior_agent()):
                     logger.warning(f"用户 {user_id} 尝试访问代理资源但无权限")
                     return jsonify({
@@ -174,7 +176,7 @@ def agent_required(func):
                         'message': '需要代理权限',
                         'code': 'agent_required'
                     }), 403
-                
+
             return func(*args, **kwargs)
         except Exception as e:
             logger.warning(f"认证失败: {str(e)}")
@@ -194,11 +196,11 @@ def admin_or_agent_required(func):
         try:
             verify_jwt_in_request()
             user_id = get_jwt_identity()
-            
+
             # 检查用户是否为管理员或代理
             with get_db_session() as session:
                 user = session.query(User).filter_by(id=user_id).first()
-                
+
                 if not user or user.role == 0:  # 普通用户无权限
                     logger.warning(f"用户 {user_id} 尝试访问管理或代理资源但无权限")
                     return jsonify({
@@ -206,7 +208,7 @@ def admin_or_agent_required(func):
                         'message': '需要管理员或代理权限',
                         'code': 'admin_or_agent_required'
                     }), 403
-                
+
             return func(*args, **kwargs)
         except Exception as e:
             logger.warning(f"认证失败: {str(e)}")
@@ -215,4 +217,4 @@ def admin_or_agent_required(func):
                 'message': '请先登录',
                 'code': 'login_required'
             }), 401
-    return decorated_function 
+    return decorated_function
