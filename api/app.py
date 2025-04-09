@@ -1435,19 +1435,7 @@ def agent_charge():
                     'message': f'不能给其他代理或管理员充值'
                 }), 400
             
-            # 执行划扣操作：从代理账户扣除，加到用户账户
-            # 1. 从代理账户扣除
-            agent_user.balance = float(agent_user.balance) - amount
-            agent_user.total_consumed = float(agent_user.total_consumed) + amount
-            
-            # 2. 给用户账户充值
-            target_user.balance = float(target_user.balance) + amount
-            target_user.total_charged = float(target_user.total_charged) + amount
-            
-            # 保存更改
-            session.commit()
-            
-            # 记录交易历史
+            # 记录交易历史，从代理账户划扣，加到用户账户
             BalanceService.record_agent_charge(agent_id, target_user.id, amount)
             
             logger.info(f"代理 {agent['username']} 为用户 {target_user.username} 充值 {amount} 点")

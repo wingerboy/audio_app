@@ -3,7 +3,7 @@ import { AxiosProgressEvent } from 'axios';
 
 // 获取API基础URL
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002/api';
-// const API_BASE_URL = 'http://8.155.13.90:5002/api';
+// const API_BASE_URL = 'http://117.50.172.107:5002/api';
 // 创建API客户端
 const api = axios.create({
   baseURL: API_BASE_URL, // 使用环境变量中的API地址
@@ -419,7 +419,12 @@ export const apiService = {
   },
 
   // 代理划扣接口 - 将点数从代理账户划扣到普通用户账户
-  agentCharge: async (email: string, amount: number): Promise<ApiResponse<{agent_balance: number, user_balance: number, amount: number}>> => {
+  agentCharge: async (email: string, amount: number): Promise<ApiResponse<{
+    agent_balance: number, 
+    user_balance: number, 
+    amount: number,
+    actual_received?: number
+  }>> => {
     const response = await api.post('/balance/agent/charge', {
       email: email,
       amount: amount
