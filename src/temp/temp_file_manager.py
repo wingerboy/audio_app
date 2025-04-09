@@ -43,6 +43,19 @@ class TempFileManager:
         # 添加保护文件列表，这些文件不会被cleanup方法清理
         self.protected_files: List[str] = []
     
+    def get_temp_file(self, suffix: str = "", prefix: Optional[str] = None) -> str:
+        """
+        创建临时文件（create_temp_file的别名，用于兼容性）
+        
+        Args:
+            suffix: 文件后缀
+            prefix: 文件前缀，默认使用类初始化时指定的前缀
+            
+        Returns:
+            临时文件的路径
+        """
+        return self.create_temp_file(suffix=suffix, prefix=prefix)
+    
     def create_temp_file(self, suffix: str = "", prefix: Optional[str] = None) -> str:
         """
         创建临时文件

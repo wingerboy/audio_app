@@ -140,10 +140,13 @@ export default function AgentChargePage() {
           ? result.data.actual_received 
           : result.data.amount;
 
+        // 计算充值后的实际用户余额
+        const actualUserBalance = result.data.user_balance + actualReceivedAmount;
+        
         // 显示详细信息
         setSuccess(`成功为邮箱 ${email} 划扣 ${amountValue} 点数`);
         setAgentBalance(result.data.agent_balance);
-        setUserBalance(result.data.user_balance);
+        setUserBalance(actualUserBalance);
 
         // 如果实际到账金额与划扣金额不同，显示差异
         if (actualReceivedAmount !== amountValue) {
@@ -160,7 +163,7 @@ export default function AgentChargePage() {
         if (queryResult && queryResult.email === email) {
           setQueryResult({
             ...queryResult,
-            balance: result.data.user_balance
+            balance: actualUserBalance
           });
         }
       } else {
@@ -315,7 +318,7 @@ export default function AgentChargePage() {
                       <div className="text-sm">代理划扣后余额: <span className="font-semibold">{agentBalance}</span> 点</div>
                     )}
                     {userBalance !== null && (
-                      <div className="text-sm">用户充值后余额: <span className="font-semibold">{userBalance}</span> 点</div>
+                      <div className="text-sm">用户实际充值后余额: <span className="font-semibold">{userBalance}</span> 点</div>
                     )}
                     <div className="mt-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
                       <div className="font-medium mb-1">划扣说明:</div>

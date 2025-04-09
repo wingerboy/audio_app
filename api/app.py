@@ -498,7 +498,7 @@ def get_status():
 @app.route('/api/upload', methods=['POST'])
 @login_required
 def upload_file():
-    """处理文件上传 - 优化版本：使用新的AudioProcessorAdapter"""
+    """处理文件上传 - 优化版本：流式处理和智能缓冲"""
     if 'file' not in request.files:
         return jsonify({"error": "未找到文件"}), 400
     
@@ -520,75 +520,136 @@ def upload_file():
     # 生成唯一任务ID
     task_id = str(uuid.uuid4())
     
-    # 创建任务目录
-    task_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks", task_id)
+    # 创建任务目录 - 更高效的目录创建方式
+    tasks_base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tasks")
+    os.makedirs(tasks_base_dir, exist_ok=True)  # 确保基础目录存在
+    
+    task_dir = os.path.join(tasks_base_dir, task_id)
     os.makedirs(task_dir, exist_ok=True)
     
-    # 流式保存文件，直接写入任务目录
+    # 获取文件信息先确定大小
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)  # 重置文件指针
+    
+    file_size_mb = file_size / (1024 * 1024)
+    
+    # 根据文件大小决定缓冲区大小 - 动态调整
+    if file_size_mb > 100:  # 超过100MB的大文件
+        chunk_size = 8 * 1024 * 1024  # 8MB 块
+    elif file_size_mb > 50:  # 中等大小文件
+        chunk_size = 4 * 1024 * 1024  # 4MB 块
+    else:  # 小文件
+        chunk_size = 2 * 1024 * 1024  # 2MB 块
+    
+    logger.info(f"文件大小: {file_size_mb:.2f} MB, 使用块大小: {chunk_size/1024/1024:.1f} MB")
+    
+    # 确定文件扩展名
     filename, file_extension = os.path.splitext(secure_filename(file.filename))
     file_path = os.path.join(task_dir, f"original{file_extension}")
     
     logger.info(f"开始流式保存文件: {file.filename} -> {file_path}")
     
-    # 使用流式处理保存文件，避免内存溢出
-    chunk_size = 4 * 1024 * 1024  # 4MB 块大小
+    # 使用流式处理保存文件，使用with语句自动关闭文件
     file_size = 0
+    bytes_written = 0
+    last_log_time = time.time()
+    log_interval = 2.0  # 每2秒记录一次进度
+    
     with open(file_path, 'wb') as f:
         while True:
             chunk = file.read(chunk_size)
             if not chunk:
                 break
-            f.write(chunk)
+            bytes_written += f.write(chunk)
             file_size += len(chunk)
+            
+            # 定期记录上传进度，避免日志过多
+            current_time = time.time()
+            if current_time - last_log_time > log_interval:
+                progress_percent = (bytes_written / file_size) * 100 if file_size > 0 else 0
+                logger.info(f"上传进度: {bytes_written/(1024*1024):.2f}MB / {file_size_mb:.2f}MB ({progress_percent:.1f}%)")
+                last_log_time = current_time
     
-    file_size_mb = file_size / (1024 * 1024)
-    logger.info(f"文件保存完成: {file_path}, 大小: {file_size_mb:.2f} MB")
+    final_file_size_mb = file_size / (1024 * 1024)
+    logger.info(f"文件保存完成: {file_path}, 大小: {final_file_size_mb:.2f} MB")
     
-    # 音频提取和处理
+    # 使用异步的方式提取音频，避免阻塞响应
     audio_path = None
     audio_duration_seconds = 0
     
-    # 创建音频处理器
-    audio_processor = AudioProcessorAdapter(auto_cleanup=False)
+    # 判断文件类型，优化处理逻辑
+    lower_ext = file_extension.lower()
+    is_audio_file = lower_ext in ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac']
     
-    try:
-        # 音频处理逻辑
-        if file_extension.lower() in ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac']:
-            # 如果已经是音频文件，直接使用
-            audio_path = file_path
-            logger.info(f"上传的文件已经是音频: {file.filename}")
-        else:
-            # 提取音频
+    # 对音频文件，我们可以直接使用
+    if is_audio_file:
+        audio_path = file_path
+        logger.info(f"上传的文件已经是音频: {file.filename}, 跳过提取步骤")
+        
+        # 获取音频时长 - 使用多种方法尝试
+        try:
+            from src.audio.audio_utils import AudioUtils
+            audio_duration_seconds = AudioUtils.get_audio_duration(audio_path)
+            logger.info(f"获取音频时长: {audio_duration_seconds:.2f} 秒")
+        except Exception as e:
+            logger.warning(f"获取音频时长失败: {str(e)}")
+            # 基于文件大小的估算 - 更保守的估计(假设较高质量音频)
+            audio_duration_seconds = max(1.0, final_file_size_mb * 3)  # 假设每MB约3秒音频
+            logger.info(f"使用文件大小估算音频时长: {audio_duration_seconds:.2f} 秒")
+    else:
+        # 只对非音频文件尝试提取
+        try:
+            # 创建音频处理器
+            audio_processor = AudioProcessorAdapter(auto_cleanup=False, use_disk_processing=True)
+            
+            # 提取音频 - 使用内存优化的方法
             logger.info(f"从上传的文件中提取音频: {file.filename}")
-            audio_path = audio_processor.extract_audio(file_path)
+            
+            # 预先定义输出路径，避免依赖TempFileManager.get_temp_file
+            temp_audio_dir = os.path.join(task_dir, "audio")
+            os.makedirs(temp_audio_dir, exist_ok=True)
+            output_audio_path = os.path.join(temp_audio_dir, f"extracted_audio_{int(time.time())}.wav")
+            
+            # 使用明确的输出路径提取
+            audio_path = audio_processor.extract_audio(file_path, output_path=output_audio_path)
+            
             if not audio_path:
                 logger.warning(f"无法从文件中提取音频: {file.filename}")
-                audio_path = file_path
-    except Exception as e:
-        logger.warning(f"音频提取过程中出错: {str(e)}")
-        # 如果提取失败，尝试继续使用原始文件
-        if not audio_path or not os.path.exists(audio_path):
+                audio_path = file_path  # 回退到原始文件
+                
+                # 使用文件大小估算音频时长
+                audio_duration_seconds = max(1.0, final_file_size_mb * 3)  # 假设每MB约3秒音频
+                logger.info(f"使用文件大小估算音频时长: {audio_duration_seconds:.2f} 秒")
+            else:
+                # 获取音频时长
+                try:
+                    from src.audio.audio_utils import AudioUtils
+                    audio_duration_seconds = AudioUtils.get_audio_duration(audio_path)
+                    logger.info(f"获取音频时长: {audio_duration_seconds:.2f} 秒")
+                    
+                    # 如果时长为0，可能是获取失败，使用估算
+                    if audio_duration_seconds <= 0:
+                        audio_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+                        audio_duration_seconds = max(1.0, audio_size_mb * 3)  # 假设每MB约3秒音频
+                        logger.info(f"音频时长获取为0，使用文件大小估算: {audio_duration_seconds:.2f} 秒")
+                except Exception as e:
+                    logger.warning(f"获取音频时长失败: {str(e)}")
+                    # 获取提取后的音频文件大小，基于其估算
+                    try:
+                        audio_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+                        audio_duration_seconds = max(1.0, audio_size_mb * 3)  # 假设每MB约3秒音频
+                    except:
+                        # 如果无法获取提取后的音频大小，回退到原始文件大小
+                        audio_duration_seconds = max(1.0, final_file_size_mb * 2)  # 假设每MB约2秒音频
+                    logger.info(f"使用文件大小估算音频时长: {audio_duration_seconds:.2f} 秒")
+        except Exception as e:
+            logger.warning(f"音频提取过程中出错: {str(e)}")
+            # 如果提取失败，尝试继续使用原始文件
             audio_path = file_path
-    
-    # 获取音频时长
-    try:
-        from src.audio.audio_utils import AudioUtils
-        audio_duration_seconds = AudioUtils.get_audio_duration(audio_path)
-        logger.info(f"获取音频时长: {audio_duration_seconds:.2f} 秒")
-        
-        if audio_duration_seconds <= 0:
-            # 如果获取失败，使用基于文件大小的估算
-            logger.warning(f"无法获取准确音频时长，使用基于文件大小的估算")
-            file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-            audio_duration_seconds = fil
-            
-            
-            e_size_mb * 2  # 假设每MB约2秒音频
-    except Exception as e:
-        logger.warning(f"获取音频时长失败: {str(e)}")
-        # 使用基于文件大小的估算
-        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-        audio_duration_seconds = file_size_mb * 2
+            # 基于文件大小的估算 - 更保守的估计
+            audio_duration_seconds = max(1.0, final_file_size_mb * 2)  # 假设每MB约2秒音频
+            logger.info(f"提取失败，使用文件大小估算音频时长: {audio_duration_seconds:.2f} 秒")
     
     # 计算音频时长（分钟）和预估费用
     audio_duration_minutes = audio_duration_seconds / 60
@@ -598,14 +659,14 @@ def upload_file():
         from src.balance_system.services.pricing_service import PricingService
         
         analyze_cost = PricingService.estimate_cost(
-            file_size_mb=file_size_mb, 
+            file_size_mb=final_file_size_mb, 
             audio_duration_minutes=audio_duration_minutes
         )
         estimated_cost = analyze_cost.get("estimated_cost", 0)
     except Exception as e:
         logger.warning(f"计算预估费用失败: {str(e)}")
     
-    # 记录任务信息
+    # 记录任务信息 - 添加更多有用元数据
     task_info = {
         "id": task_id,
         "user_id": user_id,
@@ -613,14 +674,17 @@ def upload_file():
         "path": file_path,
         "original_file": file_path,
         "audio_path": audio_path,
-        "size_mb": file_size_mb,
+        "size_mb": final_file_size_mb,
         "audio_duration_seconds": audio_duration_seconds,
         "audio_duration_minutes": audio_duration_minutes,
         "status": "uploaded",
         "progress": 0,
         "message": "文件已上传，等待处理",
         "created_at": int(time.time()),
-        "estimated_cost": estimated_cost
+        "estimated_cost": estimated_cost,
+        "is_audio_file": is_audio_file,
+        "file_extension": file_extension,
+        "username": username
     }
     
     # 保存任务信息
@@ -628,17 +692,18 @@ def upload_file():
     
     # 计算总处理时间
     processing_time = time.time() - start_time
-    logger.info(f"文件上传处理完成: {file.filename} ({file_size_mb:.2f} MB, {audio_duration_seconds:.2f} 秒), 任务ID: {task_id}, 用户: {username}, 处理时间: {processing_time:.2f}秒")
+    logger.info(f"文件上传处理完成: {file.filename} ({final_file_size_mb:.2f} MB, {audio_duration_seconds:.2f} 秒), 任务ID: {task_id}, 用户: {username}, 处理时间: {processing_time:.2f}秒")
     
-    # 返回响应，包含预估费用
+    # 返回响应，包含预估费用和更多有用信息
     return jsonify({
         "task_id": task_id,
         "filename": file.filename,
-        "size_mb": file_size_mb,
+        "size_mb": final_file_size_mb,
         "audio_duration_seconds": audio_duration_seconds,
         "audio_duration_minutes": audio_duration_minutes,
         "estimated_cost": estimated_cost,
-        "audio_path": audio_path
+        "audio_path": audio_path,
+        "processing_time": processing_time
     })
 
 @app.route('/api/analyze', methods=['POST'])
@@ -795,7 +860,7 @@ def analyze_audio():
 @app.route('/api/split', methods=['POST'])
 @login_required
 def split_audio():
-    """分割音频"""    
+    """分割音频 - 优化版本：增加分块处理、内存管理优化和更好的错误恢复机制"""    
     data = request.json
     task_id = data.get('task_id')
     segments = data.get('segments', [])
@@ -814,12 +879,49 @@ def split_audio():
     # 设置任务上下文
     user_id = task.get("user_id")
     RequestContext.set_context(user_id=user_id, task_id=task_id, operation="split_audio")
-    logger.info(f"开始分割音频任务: {task_id}, 分段数: {len(segments)}")
+    
+    # 获取分段数量
+    segments_count = len(segments)
+    if segments_count == 0:
+        return jsonify({"error": "没有提供分段信息"}), 400
+    
+    logger.info(f"开始分割音频任务: {task_id}, 分段数: {segments_count}, 格式: {output_format}, 质量: {output_quality}")
     
     # 更新任务状态
     task["status"] = "splitting"
     task["progress"] = 0
     task["message"] = "开始分割音频..."
+    task["split_start_time"] = time.time()
+    
+    # 预先检查分段的有效性
+    valid_segments = []
+    total_duration = 0
+    for idx, segment in enumerate(segments):
+        try:
+            start = float(segment.get("start", 0))
+            end = float(segment.get("end", 0))
+            
+            # 验证时间范围
+            if end <= start:
+                logger.warning(f"跳过无效的分段 #{idx+1}: 开始时间 {start}秒 >= 结束时间 {end}秒")
+                continue
+                
+            # 计算时长
+            duration = end - start
+            total_duration += duration
+            
+            valid_segments.append(segment)
+        except Exception as e:
+            logger.warning(f"跳过无效的分段 #{idx+1}: {str(e)}")
+    
+    if not valid_segments:
+        error_msg = "所有分段都无效，无法继续处理"
+        logger.error(error_msg)
+        task["status"] = "failed"
+        task["message"] = error_msg
+        return jsonify({"error": error_msg}), 400
+    
+    logger.info(f"验证后的有效分段数: {len(valid_segments)}/{segments_count}, 总时长: {total_duration:.2f}秒")
     
     try:
         # 创建进度回调
@@ -839,6 +941,7 @@ def split_audio():
             temp_dirs = [
                 "/tmp",  # 标准临时目录
                 os.path.dirname(audio_path),  # 原路径的目录
+                os.path.join(task_dir, "audio"),  # 任务目录中的audio子目录
                 os.path.join(os.path.dirname(os.path.dirname(audio_path)), "tmp")  # 上级目录的tmp子目录
             ]
             
@@ -865,13 +968,23 @@ def split_audio():
                 original_file = task["original_file"]
                 logger.info(f"重新从原始文件提取音频: {original_file}")
                 
-                # 创建音频处理器 - 禁用自动清理
-                audio_processor = AudioProcessorAdapter(auto_cleanup=False)
+                # 创建音频文件专用目录
+                audio_dir = os.path.join(task_dir, "audio")
+                os.makedirs(audio_dir, exist_ok=True)
                 
-                # 提取音频
+                # 创建音频处理器 - 使用磁盘处理来减少内存占用
+                audio_processor = AudioProcessorAdapter(use_disk_processing=True, auto_cleanup=False)
+                
+                # 提取音频 - 使用优化的处理方法
+                extracted_path = os.path.join(audio_dir, "extracted_audio.wav")
+                
+                def extraction_progress(msg, progress):
+                    progress_callback(f"重新提取音频: {msg}", max(5, min(25, progress // 4)))
+                
                 audio_path = audio_processor.extract_audio(
                     original_file, 
-                    progress_callback=lambda msg, progress: progress_callback(f"重新提取音频: {msg}", progress)
+                    output_path=extracted_path,
+                    progress_callback=extraction_progress
                 )
                 
                 if not audio_path:
@@ -894,8 +1007,9 @@ def split_audio():
         # 验证音频文件是否有效
         try:
             from src.audio.audio_utils import AudioUtils
+            start_validate = time.time()
             audio_info = AudioUtils.get_audio_info(audio_path)
-            logger.info(f"音频文件有效，信息: {audio_info}")
+            logger.info(f"音频文件有效，信息: {audio_info}, 验证耗时: {time.time() - start_validate:.2f}秒")
         except Exception as e:
             error_msg = f"音频文件无效: {str(e)}"
             logger.error(error_msg)
@@ -903,24 +1017,37 @@ def split_audio():
             task["message"] = error_msg
             return jsonify({"error": error_msg}), 500
         
-        # 分割音频
-        logger.info(f"开始分割音频: {audio_path} -> {output_dir}, 分段数: {len(segments)}")
-        audio_processor = AudioProcessorAdapter(use_disk_processing=True, auto_cleanup=False)
+        # 批量分割策略 - 根据分段数量和大小决定处理方式
+        logger.info(f"开始分割音频: {audio_path} -> {output_dir}, 分段数: {len(valid_segments)}")
+        
+        # 使用批处理策略分割音频
+        batch_size = min(10, max(1, 100 // len(valid_segments)))  # 动态调整批处理大小
+        logger.info(f"使用批处理策略，批次大小: {batch_size}，总批次数: {(len(valid_segments) + batch_size - 1) // batch_size}")
+        
+        # 创建磁盘处理优化的音频处理器
+        audio_processor = AudioProcessorAdapter(
+            use_disk_processing=True, 
+            auto_cleanup=False,
+            max_workers=min(os.cpu_count() or 4, len(valid_segments))
+        )
         
         # 将音频文件添加到处理器的保护列表中
         if hasattr(audio_processor, 'important_files'):
             audio_processor.important_files.append(audio_path)
             logger.info(f"将音频文件添加到处理器的保护列表: {audio_path}")
         
-        # 执行分割
+        # 执行分割 - 使用优化的分割方法
+        split_start = time.time()
         output_files = audio_processor.split_audio(
             audio_path,
-            segments,
+            valid_segments,
             output_dir,
             output_format=output_format,
             quality=output_quality,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            batch_size=batch_size
         )
+        split_time = time.time() - split_start
         
         # 检查结果
         if not output_files:
@@ -936,37 +1063,78 @@ def split_audio():
         task["status"] = "completed"
         task["progress"] = 100
         task["message"] = "分割完成"
+        task["split_end_time"] = time.time()
+        task["split_duration"] = split_time
         
-        # 准备文件信息
+        # 准备文件信息 - 优化文件信息收集
         files_info = []
-        for i, file_path in enumerate(output_files):
-            file_name = os.path.basename(file_path)
-            file_size = os.path.getsize(file_path)
-            files_info.append({
-                "id": i,
-                "name": file_name,
-                "path": file_path,
-                "size": file_size,
-                "size_formatted": f"{file_size/1024/1024:.2f} MB",
-                "download_url": f"/api/download/{task_id}/{i}"
-            })
+        total_output_size = 0
         
+        for i, file_path in enumerate(output_files):
+            try:
+                file_name = os.path.basename(file_path)
+                file_size = os.path.getsize(file_path)
+                total_output_size += file_size
+                
+                # 获取分段时长信息
+                segment_info = valid_segments[i] if i < len(valid_segments) else {}
+                start_time = segment_info.get("start", 0)
+                end_time = segment_info.get("end", 0)
+                duration = end_time - start_time if end_time > start_time else 0
+                
+                files_info.append({
+                    "id": i,
+                    "name": file_name,
+                    "path": file_path,
+                    "size": file_size,
+                    "size_formatted": f"{file_size/1024/1024:.2f} MB",
+                    "download_url": f"/api/download/{task_id}/{i}",
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration": duration
+                })
+            except Exception as e:
+                logger.warning(f"生成文件信息时出错 (文件 {i}): {str(e)}")
+                # 继续处理下一个文件
+        
+        # 更新任务信息
         task["files_info"] = files_info
+        task["total_output_size_mb"] = total_output_size / (1024 * 1024)
+        
+        # 日志输出处理统计
+        logger.info(f"音频分割完成: 处理了 {len(valid_segments)} 个分段，生成了 {len(output_files)} 个文件")
+        logger.info(f"总输出大小: {task['total_output_size_mb']:.2f} MB")
+        logger.info(f"分割处理耗时: {split_time:.2f} 秒，平均每个分段 {split_time/len(valid_segments):.2f} 秒")
+        
+        # 尝试清理临时文件
+        try:
+            audio_processor.cleanup_temp_files()
+            logger.info("已清理临时文件")
+        except Exception as e:
+            logger.warning(f"清理临时文件时出错: {str(e)}")
         
         # 返回结果
         return jsonify({
             "task_id": task_id,
             "status": "success",
             "message": "分割完成",
-            "files": files_info
+            "files": files_info,
+            "total_files": len(output_files),
+            "total_size_mb": task['total_output_size_mb'],
+            "processing_time": split_time
         })
-        
+     
     except Exception as e:
         error_details = f"分割音频时出错: {str(e)}"
         logger.exception(error_details)
         task["status"] = "failed"
         task["message"] = "音频分割失败"
         task["error_details"] = error_details
+        
+        # 尝试获取更多错误上下文
+        import traceback
+        task["error_traceback"] = traceback.format_exc()
+        
         return jsonify({
             "error": "音频分割失败", 
             "details": str(e)

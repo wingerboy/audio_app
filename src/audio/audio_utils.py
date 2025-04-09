@@ -64,10 +64,16 @@ class AudioUtils:
         if not os.path.exists(audio_path):
             AudioUtils.logger.error(f"文件不存在: {audio_path}")
             return 0.0
+        
+        # 获取文件大小以便在所有方法失败时提供估算
+        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
             
         # 根据文件扩展名确定格式
         _, ext = os.path.splitext(audio_path)
         format = ext.strip('.').lower()
+        
+        # 记录并跟踪所有尝试的方法和错误
+        errors = []
         
         # 尝试使用wave模块读取WAV文件
         if format == 'wav':
@@ -79,17 +85,21 @@ class AudioUtils:
                     AudioUtils.logger.info(f"使用wave模块获取到WAV文件时长: {duration:.2f}秒")
                     return duration
             except Exception as e:
-                AudioUtils.logger.warning(f"使用wave模块获取WAV文件时长失败: {str(e)}")
+                error_msg = f"使用wave模块获取WAV文件时长失败: {str(e)}"
+                AudioUtils.logger.warning(error_msg)
+                errors.append(error_msg)
         
         # 尝试使用pydub获取时长
         if PYDUB_AVAILABLE:
             try:
-                audio = AudioUtils.load_audio(audio_path)
+                audio = AudioSegment.from_file(audio_path)
                 duration = len(audio) / 1000.0  # pydub以毫秒为单位
                 AudioUtils.logger.info(f"使用pydub获取到音频时长: {duration:.2f}秒")
                 return duration
             except Exception as e:
-                AudioUtils.logger.warning(f"使用pydub获取音频时长失败: {str(e)}")
+                error_msg = f"使用pydub获取音频时长失败: {str(e)}"
+                AudioUtils.logger.warning(error_msg)
+                errors.append(error_msg)
         
         # 尝试使用ffprobe获取时长
         try:
@@ -102,15 +112,45 @@ class AudioUtils:
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0 and result.stdout.strip():
-                duration = float(result.stdout.strip())
-                AudioUtils.logger.info(f"使用ffprobe获取到音频时长: {duration:.2f}秒")
-                return duration
+                try:
+                    duration = float(result.stdout.strip())
+                    AudioUtils.logger.info(f"使用ffprobe获取到音频时长: {duration:.2f}秒")
+                    return duration
+                except ValueError as e:
+                    error_msg = f"ffprobe返回的时长无法转换为浮点数: {result.stdout.strip()}, 错误: {str(e)}"
+                    AudioUtils.logger.warning(error_msg)
+                    errors.append(error_msg)
+            else:
+                error_msg = f"ffprobe返回非零状态码或空输出: {result.returncode}, 输出: {result.stdout}"
+                AudioUtils.logger.warning(error_msg)
+                errors.append(error_msg)
         except Exception as e:
-            AudioUtils.logger.warning(f"使用ffprobe获取音频时长失败: {str(e)}")
+            error_msg = f"使用ffprobe获取音频时长失败: {str(e)}"
+            AudioUtils.logger.warning(error_msg)
+            errors.append(error_msg)
         
-        # 所有方法都失败，返回0
-        AudioUtils.logger.error(f"无法获取音频时长: {audio_path}")
-        return 0.0
+        # 尝试使用mediainfo工具（如果可用）
+        try:
+            cmd = ['mediainfo', '--Output=General;%Duration%', audio_path]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    # mediainfo返回的是毫秒
+                    duration = float(result.stdout.strip()) / 1000.0
+                    AudioUtils.logger.info(f"使用mediainfo获取到音频时长: {duration:.2f}秒")
+                    return duration
+                except ValueError:
+                    AudioUtils.logger.warning(f"mediainfo返回的时长无法转换为浮点数: {result.stdout.strip()}")
+        except (FileNotFoundError, subprocess.SubprocessError):
+            # mediainfo可能不可用，忽略此错误
+            AudioUtils.logger.debug("mediainfo工具不可用，跳过")
+        
+        # 所有方法都失败，根据文件大小估算
+        estimated_duration = max(1.0, file_size_mb * 3)  # 假设每MB约3秒音频
+        AudioUtils.logger.warning(f"所有方法获取音频时长失败，根据文件大小估算: {estimated_duration:.2f}秒 ({file_size_mb:.2f}MB)")
+        AudioUtils.logger.debug(f"失败原因: {'; '.join(errors)}")
+        
+        return estimated_duration
     
     @staticmethod
     def get_audio_info(audio_path: str) -> Dict[str, Any]:
