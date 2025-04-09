@@ -2,8 +2,13 @@ import './globals.css';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { Navbar } from '@/components/Navbar';
-import { AuthInitializer } from './AuthInitializer';
+import dynamic from 'next/dynamic';
 import { ThemeProvider } from '@/components/ThemeProvider';
+
+// 使用动态导入确保AuthInitializer仅在客户端渲染
+const AuthInitializer = dynamic(() => import('./AuthInitializer').then(mod => mod.AuthInitializer), 
+  { ssr: false }
+);
 
 // 设置字体
 const inter = Inter({ subsets: ['latin'] });

@@ -580,7 +580,10 @@ def upload_file():
             # 如果获取失败，使用基于文件大小的估算
             logger.warning(f"无法获取准确音频时长，使用基于文件大小的估算")
             file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-            audio_duration_seconds = file_size_mb * 2  # 假设每MB约2秒音频
+            audio_duration_seconds = fil
+            
+            
+            e_size_mb * 2  # 假设每MB约2秒音频
     except Exception as e:
         logger.warning(f"获取音频时长失败: {str(e)}")
         # 使用基于文件大小的估算

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { AxiosProgressEvent } from 'axios';
 
 // 获取API基础URL
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002/api';
@@ -14,9 +15,24 @@ const api = axios.create({
 // 配置请求拦截器，自动添加认证令牌
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`;
+    try {
+      // 首先尝试从localStorage获取token
+      const token = localStorage.getItem('auth_token');
+      
+      // 如果localStorage中有token，使用它
+      if (token) {
+        config.headers['Authorization'] = `Bearer ${token}`;
+      } 
+      // 如果localStorage中没有token，尝试从zustand store获取
+      else {
+        // 这里我们需要动态导入，因为在拦截器初始化时store可能还未创建
+        const authState = require('./store').useAppStore.getState().auth;
+        if (authState && authState.token) {
+          config.headers['Authorization'] = `Bearer ${authState.token}`;
+        }
+      }
+    } catch (error) {
+      console.error('设置认证头失败:', error);
     }
     return config;
   },
@@ -308,7 +324,7 @@ export const apiService = {
   },
 
   // 上传文件
-  uploadFile: async (file: File): Promise<UploadResponse> => {
+  uploadFile: async (file: File, onProgress?: (event: AxiosProgressEvent) => void): Promise<UploadResponse> => {
     const formData = new FormData();
     formData.append('file', file);
     
@@ -317,7 +333,10 @@ export const apiService = {
         'Content-Type': 'multipart/form-data',
       },
       onUploadProgress: (progressEvent) => {
-        // 可以在这里实现进度回调
+        // 实现进度回调
+        if (onProgress) {
+          onProgress(progressEvent);
+        }
         console.log(`Upload progress: ${Math.round((progressEvent.loaded * 100) / (progressEvent.total || 1))}%`);
       },
     });

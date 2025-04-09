@@ -218,8 +218,12 @@ export const useAppStore = create<AppState>()(
       
       // 认证相关方法
       login: (token, user) => {
-        // 保存token到localStorage
-        localStorage.setItem('auth_token', token);
+        try {
+          // 保存token到localStorage
+          localStorage.setItem('auth_token', token);
+        } catch (e) {
+          console.error('保存token到localStorage失败:', e);
+        }
         
         // 更新状态
         set({
@@ -235,8 +239,12 @@ export const useAppStore = create<AppState>()(
       },
       
       logout: () => {
-        // 从localStorage中移除token
-        localStorage.removeItem('auth_token');
+        try {
+          // 从localStorage中移除token
+          localStorage.removeItem('auth_token');
+        } catch (e) {
+          console.error('从localStorage移除token失败:', e);
+        }
         
         // 更新状态
         set({
@@ -307,6 +315,32 @@ export const useAppStore = create<AppState>()(
         settings: state.settings,
         auth: state.auth, // 持久化认证信息
       }),
+      // 添加存储选项
+      storage: {
+        getItem: (name) => {
+          try {
+            const value = localStorage.getItem(name);
+            return value ? JSON.parse(value) : null;
+          } catch (e) {
+            console.error(`从存储中获取${name}失败:`, e);
+            return null;
+          }
+        },
+        setItem: (name, value) => {
+          try {
+            localStorage.setItem(name, JSON.stringify(value));
+          } catch (e) {
+            console.error(`向存储写入${name}失败:`, e);
+          }
+        },
+        removeItem: (name) => {
+          try {
+            localStorage.removeItem(name);
+          } catch (e) {
+            console.error(`从存储删除${name}失败:`, e);
+          }
+        },
+      },
     }
   )
 );

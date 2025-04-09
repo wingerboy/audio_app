@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { FiUpload, FiFile, FiCheckCircle, FiAlertCircle } from 'react-icons/fi';
 import { useAppStore } from '@/lib/store';
 import apiService from '@/lib/api';
+import { AxiosProgressEvent } from 'axios';
 
 export function FileUploader() {
   // 使用全局状态
@@ -17,6 +18,91 @@ export function FileUploader() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [realProgress, setRealProgress] = useState(0);
+  const [uploadStartTime, setUploadStartTime] = useState<number | null>(null);
+  
+  // 引用值，用于取消虚拟进度的定时器
+  const virtualProgressTimer = useRef<NodeJS.Timeout | null>(null);
+  const uploadPromise = useRef<Promise<any> | null>(null);
+  
+  // 清理函数
+  const clearVirtualProgress = () => {
+    if (virtualProgressTimer.current) {
+      clearInterval(virtualProgressTimer.current);
+      virtualProgressTimer.current = null;
+    }
+  };
+  
+  // 当组件卸载时清理定时器
+  useEffect(() => {
+    return () => clearVirtualProgress();
+  }, []);
+  
+  // 启动虚拟进度更新
+  const startVirtualProgress = (fileSizeMB: number) => {
+    setUploadStartTime(Date.now());
+    
+    // 清除之前的定时器
+    clearVirtualProgress();
+    
+    // 根据文件大小调整速度
+    const totalTime = Math.max(2000, fileSizeMB * 100); // 文件越大，总时间越长
+    const interval = Math.max(100, Math.min(500, fileSizeMB * 5)); // 更新间隔
+    const incrementStep = 1; // 每次增加的百分比
+    
+    // 计算进度曲线：开始快，中间变慢，接近结束前略微加快
+    virtualProgressTimer.current = setInterval(() => {
+      setUploadProgress(prevProgress => {
+        // 如果有真实进度并且真实进度大于虚拟进度，则使用真实进度
+        if (realProgress > prevProgress) {
+          return realProgress;
+        }
+        
+        // 当进度接近 95% 时，放慢速度，等待真实上传完成
+        if (prevProgress >= 95) {
+          clearVirtualProgress(); // 停止虚拟进度更新
+          return prevProgress;
+        }
+        
+        // 进度在不同阶段有不同的速度
+        let newIncrement = incrementStep;
+        if (prevProgress < 30) {
+          // 开始阶段快一些
+          newIncrement = incrementStep * 1.5;
+        } else if (prevProgress > 70) {
+          // 接近结束前略微减速
+          newIncrement = incrementStep * 0.7;
+        }
+        
+        return Math.min(95, prevProgress + newIncrement);
+      });
+    }, interval);
+  };
+  
+  // 处理真实上传进度
+  const handleRealProgress = (event: AxiosProgressEvent) => {
+    if (!event.total) return;
+    const percent = Math.round((event.loaded * 100) / event.total);
+    setRealProgress(percent);
+    
+    // 如果真实进度大于当前显示的进度，更新显示的进度
+    if (percent > uploadProgress) {
+      setUploadProgress(percent);
+    }
+  };
+  
+  // 完成上传
+  const completeUpload = () => {
+    // 上传完成，进度设置为100%
+    setUploadProgress(100);
+    clearVirtualProgress();
+    
+    // 计算上传用时
+    if (uploadStartTime) {
+      const uploadTime = (Date.now() - uploadStartTime) / 1000;
+      console.log(`Upload completed in ${uploadTime.toFixed(2)} seconds`);
+    }
+  };
   
   // 处理文件上传
   const handleUpload = useCallback(async (file: File) => {
@@ -24,15 +110,18 @@ export function FileUploader() {
       setUploading(true);
       setUploadError(null);
       setUploadProgress(0);
+      setRealProgress(0);
       
-      // 设置进度回调
-      const onProgress = (event: ProgressEvent) => {
-        const percent = Math.round((event.loaded * 100) / event.total);
-        setUploadProgress(percent);
-      };
+      // 启动虚拟进度显示
+      const fileSizeMB = file.size / (1024 * 1024);
+      startVirtualProgress(fileSizeMB);
       
       // 上传文件
-      const response = await apiService.uploadFile(file);
+      uploadPromise.current = apiService.uploadFile(file, handleRealProgress);
+      const response = await uploadPromise.current;
+      
+      // 完成上传，设置进度为100%
+      completeUpload();
       
       // 更新任务状态
       const taskStatus = await apiService.getTaskStatus(response.task_id);
@@ -46,8 +135,10 @@ export function FileUploader() {
     } catch (error) {
       console.error('文件上传失败:', error);
       setUploadError('文件上传失败，请重试。');
+      clearVirtualProgress();
     } finally {
       setUploading(false);
+      uploadPromise.current = null;
     }
   }, [setCurrentTask, setCurrentStep]);
   
@@ -129,13 +220,18 @@ export function FileUploader() {
             {uploading && (
               <div className="w-full max-w-md">
                 <p className="mb-2 font-medium text-gray-800 dark:text-gray-200">正在上传...</p>
-                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
                   <div
-                    className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full"
+                    className="bg-primary-600 dark:bg-primary-500 h-2.5 rounded-full transition-all duration-300 ease-out"
                     style={{ width: `${uploadProgress}%` }}
                   ></div>
                 </div>
-                <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">{uploadProgress}%</p>
+                <div className="flex justify-between mt-1">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{uploadProgress}%</p>
+                  {uploadProgress < 100 && (
+                    <p className="text-sm text-gray-500 dark:text-gray-500">处理中，请稍候...</p>
+                  )}
+                </div>
               </div>
             )}
           </div>
