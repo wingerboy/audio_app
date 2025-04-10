@@ -7,7 +7,67 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 打印彩色信息的函数
+# 默认环境设置
+IS_DOCKER=false
+FORCE_DOCKER=false
+REBUILD_FRONTEND=false
+
+# 解析命令行参数
+parse_args() {
+    for arg in "$@"; do
+        case $arg in
+            --docker)
+                IS_DOCKER=true
+                FORCE_DOCKER=true
+                export IS_DOCKER=true
+                export FORCE_DOCKER=true
+                export CONTAINER_DEPLOY=true
+                echo -e "${GREEN}[INFO]${NC} 通过参数指定为Docker容器环境"
+                ;;
+            --local)
+                IS_DOCKER=false
+                FORCE_DOCKER=false
+                export IS_DOCKER=false
+                export FORCE_DOCKER=false
+                export CONTAINER_DEPLOY=false
+                echo -e "${GREEN}[INFO]${NC} 通过参数指定为本地环境"
+                ;;
+            --rebuild-frontend)
+                REBUILD_FRONTEND=true
+                echo -e "${GREEN}[INFO]${NC} 将重新构建前端"
+                ;;
+            --api-url=*)
+                API_URL="${arg#*=}"
+                export API_URL
+                echo -e "${GREEN}[INFO]${NC} 通过参数指定API地址: $API_URL"
+                ;;
+            --api-host=*)
+                API_HOST="${arg#*=}"
+                export API_HOST
+                echo -e "${GREEN}[INFO]${NC} 通过参数指定API主机: $API_HOST"
+                ;;
+            --api-port=*)
+                API_PORT="${arg#*=}"
+                export API_PORT
+                echo -e "${GREEN}[INFO]${NC} 通过参数指定API端口: $API_PORT"
+                ;;
+            --help)
+                echo "使用方法: $0 [选项]"
+                echo "选项:"
+                echo "  --docker            指定为Docker容器环境"
+                echo "  --local             指定为本地环境（默认）"
+                echo "  --rebuild-frontend  强制重新构建前端"
+                echo "  --api-url=URL       指定前端请求后端的完整URL (例如: http://api.example.com/api)"
+                echo "  --api-host=HOST     指定后端API主机 (例如: localhost, api.example.com)"
+                echo "  --api-port=PORT     指定后端API端口 (例如: 5002, 8080)"
+                echo "  --help              显示此帮助信息"
+                exit 0
+                ;;
+        esac
+    done
+}
+
+# 提示函数
 info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -22,188 +82,13 @@ warning() {
 
 error() {
     echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 停止服务的函数
-stop_services() {
-    info "正在停止服务..."
-    
-    # 停止前端服务
-    if [ -f .frontend.pid ]; then
-        FRONTEND_PID=$(cat .frontend.pid)
-        if ps -p $FRONTEND_PID > /dev/null; then
-            kill $FRONTEND_PID
-            success "前端服务已停止"
-        else
-            warning "前端服务未运行"
-        fi
-        rm -f .frontend.pid
-    else
-        warning "未找到前端服务的PID文件"
-    fi
-    
-    # 停止后端API服务
-    if [ -f .api.pid ]; then
-        API_PID=$(cat .api.pid)
-        if ps -p $API_PID > /dev/null; then
-            kill $API_PID
-            success "后端API服务已停止"
-        else
-            warning "后端API服务未运行"
-        fi
-        rm -f .api.pid
-    else
-        warning "未找到后端API服务的PID文件"
-    fi
-    
-    # 检查是否有sudo命令
-    HAS_SUDO=0
-    if command -v sudo &> /dev/null; then
-        HAS_SUDO=1
-    fi
-    
-    # 注释掉交互式询问停止MySQL的部分，在自动关停时不要影响MySQL
-    # read -p "是否要停止MySQL服务？(y/n) " STOP_MYSQL
-    # if [ "$STOP_MYSQL" == "y" ] || [ "$STOP_MYSQL" == "Y" ]; then
-    if [ "$1" == "stop_mysql" ]; then
-        case $OS in
-            ubuntu|debian)
-                if [ $HAS_SUDO -eq 1 ]; then
-                    sudo systemctl stop mysql
-                else
-                    systemctl stop mysql 2>/dev/null || warning "停止MySQL服务失败，请手动停止"
-                fi
-                ;;
-            centos|redhat|fedora)
-                if [ $HAS_SUDO -eq 1 ]; then
-                    sudo systemctl stop mysqld
-                else
-                    systemctl stop mysqld 2>/dev/null || warning "停止MySQL服务失败，请手动停止"
-                fi
-                ;;
-            alpine)
-                if [ $HAS_SUDO -eq 1 ]; then
-                    sudo rc-service mariadb stop
-                else
-                    rc-service mariadb stop 2>/dev/null || warning "停止MySQL服务失败，请手动停止"
-                fi
-                ;;
-            macos)
-                brew services stop mysql
-                ;;
-        esac
-        success "MySQL服务已停止"
-    fi
-    # fi
-}
-
-# 自动关停已运行的服务
-cleanup_before_start() {
-    info "检查并关停已运行的服务实例..."
-    
-    # 检查前端服务
-    if [ -f .frontend.pid ]; then
-        FRONTEND_PID=$(cat .frontend.pid)
-        if ps -p $FRONTEND_PID > /dev/null; then
-            info "发现正在运行的前端服务，准备关停..."
-            kill $FRONTEND_PID
-            success "前端服务已关停"
-        fi
-        rm -f .frontend.pid
-    fi
-    
-    # 检查后端API服务
-    if [ -f .api.pid ]; then
-        API_PID=$(cat .api.pid)
-        if ps -p $API_PID > /dev/null; then
-            info "发现正在运行的后端API服务，准备关停..."
-            kill $API_PID
-            success "后端API服务已关停"
-        fi
-        rm -f .api.pid
-    fi
-    
-    # 额外检查可能存在但PID文件丢失的进程
-    info "检查可能存在的残留进程..."
-    
-    # 检查API进程
-    API_PIDS=$(ps aux | grep "python.*api/app.py" | grep -v grep | awk '{print $2}')
-    if [ ! -z "$API_PIDS" ]; then
-        info "发现残留的API进程，准备关停..."
-        for PID in $API_PIDS; do
-            kill $PID
-            success "关停API进程: $PID"
-        done
-    fi
-    
-    # 检查前端进程
-    FRONTEND_PIDS=$(ps aux | grep "npm.*start" | grep -v grep | awk '{print $2}')
-    if [ ! -z "$FRONTEND_PIDS" ]; then
-        info "发现残留的前端进程，准备关停..."
-        for PID in $FRONTEND_PIDS; do
-            kill $PID
-            success "关停前端进程: $PID"
-        done
-    fi
-    
-    # 等待进程完全停止
-    sleep 2
-    success "服务清理完成"
-}
-
-# 检测是否在Docker容器中运行
-detect_docker() {
-    info "检测运行环境..."
-    
-    IS_DOCKER=false
-    
-    # 检查/.dockerenv文件是否存在（Docker容器中特有的文件）
-    if [ -f /.dockerenv ]; then
-        IS_DOCKER=true
-        info "通过/.dockerenv文件检测到Docker环境"
-    fi
-    
-    # 检查cgroup中是否包含docker字符串
-    if [ -f /proc/1/cgroup ] && grep -q "docker\|container" /proc/1/cgroup; then
-        IS_DOCKER=true
-        info "通过cgroup检测到Docker环境"
-    fi
-    
-    # 检查hostname是否使用了容器ID形式或包含container关键词
-    CURRENT_HOSTNAME=$(hostname)
-    if [[ "$CURRENT_HOSTNAME" =~ ^[0-9a-f]{12}$ ]] || [[ "$CURRENT_HOSTNAME" == *"container"* ]]; then
-        IS_DOCKER=true
-        info "通过hostname检测到Docker环境: $CURRENT_HOSTNAME"
-    fi
-    
-    # 检查是否存在Docker相关环境变量
-    if [ ! -z "$DOCKER_CONTAINER" ] || [ ! -z "$DOCKER_HOST" ] || [ ! -z "$DOCKER_ENV" ]; then
-        IS_DOCKER=true
-        info "通过环境变量检测到Docker环境"
-    fi
-    
-    # 允许用户通过环境变量强制设置
-    if [ "$FORCE_DOCKER" = "true" ]; then
-        IS_DOCKER=true
-        info "通过用户设置FORCE_DOCKER=true强制使用Docker环境"
-    fi
-    
-    if [ "$IS_DOCKER" = true ]; then
-        info "确认Docker容器环境"
-        # 如果确认是Docker环境，设置环境变量和数据库主机
-        export FLASK_ENV=docker
-        export MYSQL_HOST=gpufree-container
-    else
-        info "检测到非Docker环境"
-        export FLASK_ENV=local
-        export MYSQL_HOST=localhost
-    fi
-    
-    export IS_DOCKER
+    exit 1
 }
 
 # 检测操作系统类型
 detect_os() {
+    info "正在检测操作系统..."
+    
     if [ -f /etc/os-release ]; then
         # freedesktop.org and systemd
         . /etc/os-release
@@ -222,16 +107,23 @@ detect_os() {
         # Older Debian/Ubuntu/etc.
         OS=Debian
         VER=$(cat /etc/debian_version)
-    elif [ -f /etc/SuSe-release ]; then
-        # Older SuSE/etc.
-        OS=SuSE
-        VER=$(cat /etc/SuSe-release)
-    elif [ -f /etc/redhat-release ]; then
+    elif [ -f /etc/Alpine-release ]; then
+        # Alpine Linux
+        OS=Alpine
+        VER=$(cat /etc/Alpine-release)
+    elif [ -f /etc/centos-release ]; then
         # Older Red Hat, CentOS, etc.
+        OS=CentOS
+        VER=$(cat /etc/centos-release | sed 's/.*release \([0-9]\).*/\1/')
+    elif [ -f /etc/redhat-release ]; then
+        # Older Red Hat, Fedora, etc.
         OS=RedHat
-        VER=$(cat /etc/redhat-release)
+        VER=$(cat /etc/redhat-release | sed 's/.*release \([0-9]\).*/\1/')
+    elif [ "$(uname)" == "Darwin" ]; then
+        # macOS
+        OS=macos
+        VER=$(sw_vers -productVersion)
     else
-        # Fall back to uname, e.g. "Linux <version>", also works for BSD, etc.
         OS=$(uname -s)
         VER=$(uname -r)
     fi
@@ -239,458 +131,666 @@ detect_os() {
     # 转换为小写
     OS=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
     
-    # 检查是否是macOS
-    if [ "$OS" == "darwin" ]; then
-        OS="macos"
-    fi
-    
-    info "检测到操作系统: $OS $VER"
-}
-
-# 启动MySQL
-start_mysql() {
-    info "正在启动MySQL服务..."
-    
-    # 检查是否有sudo命令
-    HAS_SUDO=0
-    if command -v sudo &> /dev/null; then
-        HAS_SUDO=1
-    fi
-    
+    # 简化操作系统名称
     case $OS in
-        ubuntu|debian)
-            if [ $HAS_SUDO -eq 1 ]; then
-                sudo systemctl start mysql
-            else
-                systemctl start mysql 2>/dev/null || warning "启动MySQL服务失败，请手动启动"
-            fi
+        *ubuntu*)
+            OS="ubuntu"
             ;;
-        centos|redhat|fedora)
-            if [ $HAS_SUDO -eq 1 ]; then
-                sudo systemctl start mysqld
-            else
-                systemctl start mysqld 2>/dev/null || warning "启动MySQL服务失败，请手动启动"
-            fi
+        *debian*)
+            OS="debian"
             ;;
-        alpine)
-            if [ $HAS_SUDO -eq 1 ]; then
-                sudo rc-service mariadb start
-            else
-                rc-service mariadb start 2>/dev/null || warning "启动MySQL服务失败，请手动启动"
-            fi
+        *centos*)
+            OS="centos"
             ;;
-        macos)
-            brew services start mysql
+        *redhat*|*"red hat"*)
+            OS="redhat"
             ;;
-        *)
-            warning "未知操作系统，请手动启动MySQL服务"
+        *fedora*)
+            OS="fedora"
+            ;;
+        *alpine*)
+            OS="alpine"
+            ;;
+        *darwin*)
+            OS="macos"
             ;;
     esac
     
-    success "MySQL服务已启动"
+    success "检测到操作系统: $OS $VER"
+    export OS
+    export VER
+}
+
+# 配置Docker环境
+setup_docker_env() {
+    if [ "$IS_DOCKER" = true ] || [ "$CONTAINER_DEPLOY" = "true" ]; then
+        IS_DOCKER=true
+        export IS_DOCKER=true
+        export CONTAINER_DEPLOY=true
+        success "配置Docker容器环境..."
+        
+        # 设置数据库主机 - 直接使用localhost
+        export MYSQL_HOST="localhost"
+        info "在容器内使用MySQL主机: $MYSQL_HOST"
+        
+        # 应用级设置
+        export FLASK_ENV="production"
+    else
+        export CONTAINER_DEPLOY=false
+    fi
+}
+
+# 激活Python虚拟环境
+activate_venv() {
+    if [ -f "venv/bin/activate" ]; then
+        source venv/bin/activate
+        success "已激活Python虚拟环境"
+    else
+        warning "未找到Python虚拟环境，将使用系统Python"
+    fi
+}
+
+# 设置数据库连接环境变量
+setup_db_env() {
+    # 检查.env文件是否存在
+    if [ -f ".env" ]; then
+        info "从.env文件加载环境变量"
+        
+        # 读取数据库配置
+        DB_HOST=$(grep -E "^DB_HOST=" .env | cut -d= -f2 || echo "localhost")
+        DB_PORT=$(grep -E "^DB_PORT=" .env | cut -d= -f2 || echo "3306")
+        DB_NAME=$(grep -E "^(DB_NAME|MYSQL_DATABASE)=" .env | head -1 | cut -d= -f2 || echo "audio_app")
+        DB_USER=$(grep -E "^(DB_USER|MYSQL_USER)=" .env | head -1 | cut -d= -f2 || echo "root")
+        DB_PASS=$(grep -E "^(DB_PASSWORD|MYSQL_PASSWORD)=" .env | head -1 | cut -d= -f2 || echo "")
+        
+        # 检查是否在Docker环境中
+        CONTAINER_DEPLOY=$(grep -E "^CONTAINER_DEPLOY=" .env | cut -d= -f2 || echo "false")
+        if [ "$CONTAINER_DEPLOY" = "true" ] || [ "$IS_DOCKER" = true ]; then
+            IS_DOCKER=true
+            export IS_DOCKER=true
+            export CONTAINER_DEPLOY=true
+            info "配置Docker环境变量"
+        fi
+        
+        # 设置Python环境变量
+        export DB_HOST=$DB_HOST
+        export DB_PORT=$DB_PORT
+        export DB_NAME=$DB_NAME
+        export DB_USER=$DB_USER
+        export DB_PASSWORD=$DB_PASS
+        export MYSQL_HOST=$DB_HOST
+        export MYSQL_PORT=$DB_PORT
+        export MYSQL_DATABASE=$DB_NAME
+        export MYSQL_USER=$DB_USER
+        export MYSQL_PASSWORD=$DB_PASS
+        
+        success "数据库环境变量设置完成"
+    else
+        warning "找不到.env文件，将使用默认环境变量"
+    fi
+}
+
+# 检查并创建所需目录
+check_directories() {
+    # 确保logs目录存在
+    if [ ! -d "logs" ]; then
+        mkdir -p logs
+        info "创建logs目录"
+    fi
+    
+    # 确保data目录存在
+    if [ ! -d "data" ]; then
+        mkdir -p data
+        info "创建data目录"
+    fi
+    
+    # 确保temp目录存在
+    if [ ! -d "temp" ]; then
+        mkdir -p temp
+        info "创建temp目录"
+    fi
+}
+
+# 停止已运行的服务
+stop_services() {
+    info "正在停止已运行的服务..."
+    
+    # 停止前端服务
+    if [ -f .frontend.pid ]; then
+        FRONTEND_PID=$(cat .frontend.pid)
+        if ps -p $FRONTEND_PID > /dev/null; then
+            kill $FRONTEND_PID 2>/dev/null
+            success "前端服务已停止"
+        fi
+        rm -f .frontend.pid
+    fi
+    
+    # 查找并停止可能存在的前端进程
+    FRONTEND_PIDS=$(ps aux | grep "npm.*start" | grep -v grep | awk '{print $2}')
+    if [ ! -z "$FRONTEND_PIDS" ]; then
+        for PID in $FRONTEND_PIDS; do
+            kill $PID 2>/dev/null
+            success "停止前端进程: $PID"
+        done
+    fi
+    
+    # 停止后端API服务
+    if [ -f .api.pid ]; then
+        API_PID=$(cat .api.pid)
+        if ps -p $API_PID > /dev/null; then
+            kill $API_PID 2>/dev/null
+            success "后端API服务已停止"
+        fi
+        rm -f .api.pid
+    fi
+    
+    # 查找并停止可能存在的API进程
+    API_PIDS=$(ps aux | grep "python.*app.py" | grep -v grep | awk '{print $2}')
+    if [ ! -z "$API_PIDS" ]; then
+        for PID in $API_PIDS; do
+            kill $PID 2>/dev/null
+            success "停止API进程: $PID"
+        done
+    fi
+    
+    # 等待进程完全停止
+    sleep 2
+    success "服务清理完成"
+}
+
+# 启动MySQL服务
+start_mysql() {
+    info "正在检查MySQL服务..."
+    
+    # 如果在Docker环境中，跳过在容器内启动MySQL
+    if [ "$IS_DOCKER" = true ]; then
+        # 尝试使用ping检查MySQL连接
+        mysqladmin ping -h "$MYSQL_HOST" --silent &>/dev/null
+        if [ $? -eq 0 ]; then
+            success "MySQL服务可用"
+            return 0
+        fi
+        
+        # 如果ping失败，尝试使用mysql客户端检查连接
+        if command -v mysql &>/dev/null; then
+            mysql -h "$MYSQL_HOST" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -e "SELECT 1" &>/dev/null
+            if [ $? -eq 0 ]; then
+                success "MySQL服务可用"
+                return 0
+            fi
+        fi
+        
+        warning "在Docker环境中无法连接到MySQL服务，请确保MySQL已启动"
+        return 1
+    fi
+    
+    # 检查MySQL服务是否已经在运行
+    MYSQL_RUNNING=false
+    case $OS in
+        ubuntu|debian|centos|redhat|fedora)
+            if command -v systemctl &>/dev/null; then
+                systemctl is-active --quiet mysql || systemctl is-active --quiet mysqld
+                if [ $? -eq 0 ]; then
+                    MYSQL_RUNNING=true
+                    success "MySQL服务已在运行"
+                fi
+            elif command -v service &>/dev/null; then
+                service mysql status &>/dev/null || service mysqld status &>/dev/null
+                if [ $? -eq 0 ]; then
+                    MYSQL_RUNNING=true
+                    success "MySQL服务已在运行"
+                fi
+            fi
+            ;;
+        macos)
+            if brew services list | grep mysql | grep started &>/dev/null; then
+                MYSQL_RUNNING=true
+                success "MySQL服务已在运行"
+            fi
+            ;;
+        alpine)
+            if rc-service mariadb status &>/dev/null; then
+                MYSQL_RUNNING=true
+                success "MariaDB服务已在运行"
+            fi
+            ;;
+    esac
+    
+    # 如果MySQL未运行，尝试启动它
+    if [ "$MYSQL_RUNNING" = false ]; then
+        info "尝试启动MySQL服务..."
+        
+        case $OS in
+            ubuntu|debian)
+                if command -v systemctl &>/dev/null; then
+                    sudo systemctl start mysql 2>/dev/null || sudo service mysql start 2>/dev/null
+                else
+                    service mysql start 2>/dev/null
+                fi
+                ;;
+            centos|redhat|fedora)
+                if command -v systemctl &>/dev/null; then
+                    sudo systemctl start mysqld 2>/dev/null || sudo service mysqld start 2>/dev/null
+                else
+                    service mysqld start 2>/dev/null
+                fi
+                ;;
+            alpine)
+                sudo rc-service mariadb start 2>/dev/null || rc-service mariadb start 2>/dev/null
+                ;;
+            macos)
+                brew services start mysql 2>/dev/null
+                ;;
+            *)
+                warning "未知操作系统，无法自动启动MySQL服务"
+                ;;
+        esac
+        
+        # 等待MySQL启动
+        info "等待MySQL服务启动..."
+        sleep 5
+        
+        # 检查MySQL是否已启动
+        mysqladmin ping -h "$MYSQL_HOST" --silent &>/dev/null
+        if [ $? -eq 0 ]; then
+            success "MySQL服务已成功启动"
+            return 0
+        else
+            warning "无法启动MySQL服务，应用可能无法正常工作"
+            return 1
+        fi
+    fi
+    
+    return 0
 }
 
 # 启动后端API服务
 start_api() {
     info "正在启动后端API服务..."
     
-    # 检查Python虚拟环境是否存在
-    if [ ! -d "venv" ]; then
-        warning "Python虚拟环境不存在，尝试创建..."
-        python3 -m venv venv || error "无法创建Python虚拟环境，请确保python3-venv已安装"
+    # 设置PYTHONPATH确保模块导入正确
+    export PYTHONPATH="$(pwd)"
+    
+    # 检查api目录及app.py是否存在
+    if [ -f "api/app.py" ]; then
+        info "找到API入口点: api/app.py"
+        
+        # 确保api目录被识别为Python包
+        if [ ! -f "api/__init__.py" ]; then
+            info "创建api包的__init__.py文件..."
+            touch api/__init__.py
+        fi
+        
+        # 确保api/routes目录被识别为Python包
+        if [ -d "api/routes" ] && [ ! -f "api/routes/__init__.py" ]; then
+            info "创建api/routes包的__init__.py文件..."
+            mkdir -p api/routes
+            touch api/routes/__init__.py
+        fi
+        
+        # 确保logs目录存在
+        mkdir -p logs
+        
+        # 启动后端API服务
+        if [ "$IS_DOCKER" = true ]; then
+            # Docker环境中前台运行
+            info "在Docker环境中前台启动API服务..."
+            cd api && python3 app.py
+        else
+            # 非Docker环境中后台运行
+            info "在本地环境中后台启动API服务..."
+            cd api && nohup python3 app.py > ../logs/api.log 2>&1 &
+            API_PID=$!
+            cd ..
+            
+            # 检查进程是否启动成功
+            sleep 2
+            if ps -p $API_PID > /dev/null; then
+                # 保存PID到文件
+                echo $API_PID > .api.pid
+                success "后端API服务已启动，PID: $API_PID，日志位于: logs/api.log"
+            else
+                error "后端API服务启动失败，请查看日志: logs/api.log"
+                return 1
+            fi
+        fi
+    else
+        error "找不到后端API服务入口点: api/app.py"
+        return 1
     fi
     
-    # 激活Python虚拟环境
-    source venv/bin/activate || {
-        error "无法激活Python虚拟环境"
+    return 0
+}
+
+# 设置Node.js环境
+setup_nodejs_env() {
+    info "正在设置Node.js环境..."
+    
+    # 检查Node.js是否可用
+    if ! command -v node &> /dev/null; then
+        warning "未找到Node.js，尝试寻找..."
+        
+        # 尝试从~/.node目录加载Node.js
+        NODE_DIR=$(find ~/.node -maxdepth 1 -name "node-*" -type d 2>/dev/null | head -n 1)
+        if [ -n "$NODE_DIR" ] && [ -f "$NODE_DIR/bin/node" ]; then
+            info "找到Node.js安装: $NODE_DIR"
+            export PATH="$NODE_DIR/bin:$PATH"
+        fi
+        
+        # 尝试从~/.nvm加载
+        if [ ! -f "$NODE_DIR/bin/node" ] && [ -f "$HOME/.nvm/nvm.sh" ]; then
+            info "找到NVM安装，尝试加载Node.js..."
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            nvm use 18 2>/dev/null || nvm use default 2>/dev/null
+        fi
+        
+        # 再次检查Node.js是否可用
+        if ! command -v node &> /dev/null; then
+            warning "无法找到Node.js，跳过前端构建和启动"
+            return 1
+        fi
+    fi
+    
+    # 检查npm是否可用
+    if ! command -v npm &> /dev/null; then
+        warning "无法找到npm，跳过前端构建和启动"
+        return 1
+    fi
+    
+    # 显示Node.js和npm版本
+    NODE_VER=$(node --version 2>/dev/null || echo "未知")
+    NPM_VER=$(npm --version 2>/dev/null || echo "未知")
+    success "使用Node.js: $NODE_VER (npm: $NPM_VER)"
+    
+    return 0
+}
+
+# 检查并构建前端
+check_and_build_frontend() {
+    if [ ! -d "frontend" ]; then
+        warning "未找到前端目录: frontend"
+        return 1
+    fi
+    
+    # 确保Node.js环境可用
+    setup_nodejs_env || {
+        warning "Node.js环境不可用，跳过前端构建"
         return 1
     }
     
-    # 检查是否存在logs目录
-    mkdir -p logs
+    info "检查前端代码..."
     
-    # 检查requirements.txt是否已安装
-    if [ ! -f ".requirements_installed" ]; then
-        info "安装Python依赖..."
-        pip install -r requirements.txt && touch .requirements_installed
-    fi
-    
-    # 确保api目录被识别为Python包
-    if [ ! -f "api/__init__.py" ]; then
-        info "创建api包的__init__.py文件..."
-        touch api/__init__.py
-    fi
-    
-    # 确保api/routes目录被识别为Python包
-    mkdir -p api/routes
-    if [ ! -f "api/routes/__init__.py" ]; then
-        info "创建api/routes包的__init__.py文件..."
-        touch api/routes/__init__.py
-    fi
-    
-    # 检查数据库连接
-    info "检查数据库连接..."
-    
-    # 使用全局设置的环境变量，不再重复设置
-    DB_HOST=${MYSQL_HOST:-"localhost"}
-    
-    info "使用数据库主机: $DB_HOST, 环境: $FLASK_ENV"
-    
-    # 检查MySQL连接
-    python3 - <<EOF
-import pymysql
-import os
-import sys
-import time
-
-DB_HOST = "$DB_HOST"
-DB_PORT = int(os.environ.get('MYSQL_PORT', 3306))
-DB_USER = os.environ.get('MYSQL_USER', 'audio_app_user')
-DB_PASSWORD = os.environ.get('MYSQL_PASSWORD', '')
-DB_NAME = os.environ.get('MYSQL_DATABASE', 'audio_app')
-
-print(f'尝试连接到MySQL: {DB_HOST}:{DB_PORT}, 用户: {DB_USER}, 数据库: {DB_NAME}')
-
-max_retries = 3
-retry_count = 0
-
-while retry_count < max_retries:
-    try:
-        conn = pymysql.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            connect_timeout=10
-        )
-        
-        print('MySQL连接成功！')
-        cursor = conn.cursor()
-        cursor.execute('SELECT VERSION()')
-        version = cursor.fetchone()
-        print(f'MySQL版本: {version[0]}')
-        cursor.close()
-        conn.close()
-        sys.exit(0)
-    except Exception as e:
-        print(f'MySQL连接失败: {e}')
-        retry_count += 1
-        if retry_count < max_retries:
-            wait_time = retry_count * 2
-            print(f'等待 {wait_time} 秒后重试...')
-            time.sleep(wait_time)
-        else:
-            print('已达到最大重试次数，请检查MySQL服务是否正在运行。')
-            print('确保MySQL服务已启动，并且用户名和密码正确。')
-            print('API将继续启动，但数据库相关功能可能无法使用。')
-            sys.exit(1)
-EOF
-    
-    # 即使数据库连接失败也继续启动API
-    
-    # 获取项目根目录的绝对路径
-    PROJECT_ROOT="$(pwd)"
-    
-    # 使用项目根目录作为PYTHONPATH
-    export PROJECT_ROOT
-    PYTHONPATH="$PROJECT_ROOT" nohup python -m api.app > logs/api.log 2>&1 &
-    API_PID=$!
-    
-    # 检查进程是否启动成功
-    sleep 2
-    if ps -p $API_PID > /dev/null; then
-        # 保存PID到文件
-        echo $API_PID > .api.pid
-        success "后端API服务已启动，PID: $API_PID，日志位于: logs/api.log"
-    else
-        error "后端API服务启动失败，请查看日志: logs/api.log"
+    cd frontend || {
+        warning "无法进入frontend目录"
         return 1
+    }
+    
+    # 检查是否需要安装依赖
+    if [ ! -d "node_modules" ] || [ "$REBUILD_FRONTEND" = true ]; then
+        info "安装前端依赖..."
+        npm install || {
+            cd ..
+            error "安装前端依赖失败"
+            return 1
+        }
     fi
+    
+    # 配置API地址逻辑
+    NEED_UPDATE=false
+    FRONTEND_API_URL=$(grep -E "^REACT_APP_API_URL=" .env 2>/dev/null | cut -d= -f2 || echo "")
+    
+    # 确定API地址 - 优先级: 命令行参数 > 环境变量 > .env文件 > 默认值
+    if [ -n "$API_URL" ]; then
+        # 1. 使用命令行参数提供的完整URL
+        EXPECTED_API_URL="$API_URL"
+        info "使用命令行参数指定的API地址: $EXPECTED_API_URL"
+        NEED_UPDATE=true
+    elif [ -n "$API_HOST" ] || [ -n "$API_PORT" ]; then
+        # 2. 使用命令行参数提供的主机和/或端口
+        HOST="${API_HOST:-localhost}"
+        PORT="${API_PORT:-5002}"
+        EXPECTED_API_URL="http://${HOST}:${PORT}/api"
+        info "使用命令行参数指定的API主机/端口: $EXPECTED_API_URL"
+        NEED_UPDATE=true
+    elif [ -f "../.env" ]; then
+        # 3. 从后端.env中提取API地址
+        BACKEND_HOST=$(grep -E "^API_HOST=" ../.env | cut -d= -f2 || echo "")
+        BACKEND_PORT=$(grep -E "^API_PORT=" ../.env | cut -d= -f2 || echo "")
+        BACKEND_URL=$(grep -E "^API_URL=" ../.env | cut -d= -f2 || echo "")
+        
+        if [ -n "$BACKEND_URL" ]; then
+            # 3.1 使用后端.env中指定的完整URL
+            EXPECTED_API_URL="$BACKEND_URL"
+            info "使用后端.env中配置的API URL: $EXPECTED_API_URL"
+        elif [ -n "$BACKEND_HOST" ] || [ -n "$BACKEND_PORT" ]; then
+            # 3.2 使用后端.env中的主机和/或端口
+            HOST="${BACKEND_HOST:-localhost}"
+            PORT="${BACKEND_PORT:-5002}"
+            EXPECTED_API_URL="http://${HOST}:${PORT}/api"
+            info "使用后端.env中配置的API主机/端口: $EXPECTED_API_URL"
+        elif [ "$IS_DOCKER" != true ]; then
+            # 如果不是Docker环境，设置为当前服务器IP地址
+            # 尝试获取主机IP地址
+            SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || hostname)
+            if [ -n "$SERVER_IP" ] && [ "$SERVER_IP" != "localhost" ]; then
+                EXPECTED_API_URL="http://${SERVER_IP}:5002/api"
+                info "使用服务器IP地址作为API地址: $EXPECTED_API_URL"
+            else
+                # 3.3 使用默认值
+                EXPECTED_API_URL="http://localhost:5002/api"
+                info "使用默认API地址: $EXPECTED_API_URL"
+            fi
+        else
+            # 3.3 使用默认值
+            EXPECTED_API_URL="http://localhost:5002/api"
+            info "使用默认API地址: $EXPECTED_API_URL"
+        fi
+        
+        # 检查是否需要更新
+        if [ "$FRONTEND_API_URL" != "$EXPECTED_API_URL" ] || [ "$REBUILD_FRONTEND" = true ]; then
+            NEED_UPDATE=true
+        fi
+    else
+        # 尝试获取主机IP地址
+        SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || hostname)
+        if [ -n "$SERVER_IP" ] && [ "$SERVER_IP" != "localhost" ] && [ "$IS_DOCKER" != true ]; then
+            EXPECTED_API_URL="http://${SERVER_IP}:5002/api"
+            info "使用服务器IP地址作为API地址: $EXPECTED_API_URL"
+        else
+            # 4. 使用默认值
+            EXPECTED_API_URL="http://localhost:5002/api"
+            info "使用默认API地址: $EXPECTED_API_URL"
+        fi
+        
+        # 检查是否需要更新
+        if [ "$FRONTEND_API_URL" != "$EXPECTED_API_URL" ] || [ "$REBUILD_FRONTEND" = true ]; then
+            NEED_UPDATE=true
+        fi
+    fi
+    
+    # 更新前端.env文件中的API URL
+    if [ "$NEED_UPDATE" = true ]; then
+        info "更新前端API地址为: $EXPECTED_API_URL"
+        
+        # 创建或更新.env文件
+        if [ ! -f ".env" ]; then
+            echo "REACT_APP_API_URL=$EXPECTED_API_URL" > .env
+        else
+            # 更新.env文件
+            TMP_ENV=$(mktemp)
+            cat .env | grep -v "^REACT_APP_API_URL=" > "$TMP_ENV"
+            echo "REACT_APP_API_URL=$EXPECTED_API_URL" >> "$TMP_ENV"
+            mv "$TMP_ENV" .env
+        fi
+        
+        # 显示当前的环境设置
+        info "前端环境变量配置:"
+        cat .env
+        
+        # 标记需要重新构建
+        REBUILD_FRONTEND=true
+        
+        # 导出环境变量，确保构建过程能够正确使用
+        export REACT_APP_API_URL="$EXPECTED_API_URL"
+    fi
+    
+    # 如果需要重新构建
+    if [ "$REBUILD_FRONTEND" = true ]; then
+        info "重新构建前端..."
+        # 确保环境变量能被npm构建过程使用
+        REACT_APP_API_URL="$EXPECTED_API_URL" npm run build || {
+            cd ..
+            error "前端构建失败"
+            return 1
+        }
+        success "前端构建成功，API地址: $EXPECTED_API_URL"
+    fi
+    
+    # 返回上级目录
+    cd ..
+    return 0
 }
 
 # 启动前端服务
 start_frontend() {
     info "正在启动前端服务..."
     
-    # 确保Node.js可用
-    if ! command -v node &> /dev/null; then
-        # 尝试从~/.node目录加载Node.js
-        NODE_DIR=$(find ~/.node -maxdepth 1 -name "node-*" -type d 2>/dev/null | head -n 1)
-        if [ -n "$NODE_DIR" ] && [ -f "$NODE_DIR/bin/node" ]; then
-            info "找到Node.js安装: $NODE_DIR"
-            export PATH="$NODE_DIR/bin:$PATH"
-        else
-            # 尝试从~/.nvm加载
-            if [ -f "$HOME/.nvm/nvm.sh" ]; then
-                source "$HOME/.nvm/nvm.sh"
-                nvm use 18 2>/dev/null || nvm use default 2>/dev/null
-            fi
-        fi
-    fi
+    # 确保Node.js环境可用
+    setup_nodejs_env || {
+        warning "Node.js环境不可用，跳过前端启动"
+        return 1
+    }
     
-    # 再次检查Node.js
-    if ! command -v node &> /dev/null; then
-        error "Node.js未安装或未添加到PATH，无法启动前端服务"
+    if [ ! -d "frontend" ]; then
+        warning "未找到前端目录: frontend"
         return 1
     fi
     
-    # 进入前端目录
-    cd frontend
+    cd frontend || {
+        warning "无法进入frontend目录"
+        return 1
+    }
     
-    # 检查node_modules是否存在
+    # 读取当前API URL
+    FRONTEND_API_URL=$(grep -E "^REACT_APP_API_URL=" .env 2>/dev/null | cut -d= -f2 || echo "http://localhost:5002/api")
+    info "前端将使用API地址: $FRONTEND_API_URL"
+    
+    # 确保node_modules存在
     if [ ! -d "node_modules" ]; then
-        info "安装前端依赖..."
+        info "前端依赖不存在，尝试安装..."
         npm install || {
-            error "安装前端依赖失败"
             cd ..
+            error "安装前端依赖失败"
             return 1
         }
     fi
     
-    # 以后台方式启动前端服务
-    nohup npm start > ../logs/frontend.log 2>&1 &
-    FRONTEND_PID=$!
-    
-    # 检查进程是否启动成功
-    sleep 5
-    if ps -p $FRONTEND_PID > /dev/null; then
-        # 返回根目录并保存PID到文件
-        cd ..
-        echo $FRONTEND_PID > .frontend.pid
-        success "前端服务已启动，PID: $FRONTEND_PID，日志位于: logs/frontend.log"
-    else
-        cd ..
-        error "前端服务启动失败，请查看日志: logs/frontend.log"
-        return 1
-    fi
-}
-
-# 检查服务状态
-check_services() {
-    info "正在检查服务状态..."
-    
-    # 检查是否有sudo命令
-    HAS_SUDO=0
-    if command -v sudo &> /dev/null; then
-        HAS_SUDO=1
-    fi
-    
-    # 检查MySQL服务
-    case $OS in
-        ubuntu|debian|centos|redhat|fedora)
-            if [ $HAS_SUDO -eq 1 ]; then
-                if systemctl is-active --quiet mysql || systemctl is-active --quiet mysqld; then
-                    success "MySQL服务正在运行"
-                else
-                    warning "MySQL服务未运行，尝试启动..."
-                    start_mysql
-                fi
-            else
-                # 尝试通过其他方式检查MySQL状态
-                if netstat -tlpn 2>/dev/null | grep -q 3306 || ps aux | grep -v grep | grep -q mysqld; then
-                    success "MySQL服务似乎正在运行"
-                else
-                    warning "MySQL服务可能未运行，尝试启动..."
-                    start_mysql
-                fi
-            fi
-            ;;
-        macos)
-            if brew services list | grep mysql | grep started > /dev/null; then
-                success "MySQL服务正在运行"
-            else
-                warning "MySQL服务未运行，尝试启动..."
-                start_mysql
-            fi
-            ;;
-        alpine)
-            if [ $HAS_SUDO -eq 1 ]; then
-                if rc-service mariadb status >/dev/null 2>&1; then
-                    success "MySQL服务正在运行"
-                else
-                    warning "MySQL服务未运行，尝试启动..."
-                    start_mysql
-                fi
-            else
-                # 尝试通过其他方式检查MySQL状态
-                if netstat -tlpn 2>/dev/null | grep -q 3306 || ps aux | grep -v grep | grep -q mysqld; then
-                    success "MySQL服务似乎正在运行"
-                else
-                    warning "MySQL服务可能未运行，尝试启动..."
-                    start_mysql
-                fi
-            fi
-            ;;
-        *)
-            warning "未知操作系统，无法自动检查MySQL状态"
-            ;;
-    esac
-    
-    # 检查API服务
-    if [ -f .api.pid ]; then
-        API_PID=$(cat .api.pid)
-        if ps -p $API_PID > /dev/null; then
-            success "后端API服务正在运行，PID: $API_PID"
+    # 在Docker环境中判断是否需要前台启动
+    if [ "$IS_DOCKER" = true ]; then
+        # Docker环境中通常不需要启动前端服务，只需要构建
+        if [ -d "build" ]; then
+            info "在Docker环境中使用构建好的前端静态文件"
+            cd ..
+            return 0
         else
-            warning "后端API服务未运行，PID文件可能过期，尝试启动..."
-            start_api
+            info "构建前端静态文件..."
+            # 使用环境变量构建
+            REACT_APP_API_URL="$FRONTEND_API_URL" npm run build || {
+                cd ..
+                error "前端构建失败"
+                return 1
+            }
+            cd ..
+            return 0
         fi
     else
-        warning "未找到后端API服务的PID文件，尝试启动..."
-        start_api
-    fi
-    
-    # 检查前端服务
-    if [ -f .frontend.pid ]; then
-        FRONTEND_PID=$(cat .frontend.pid)
+        # 本地环境中启动开发服务器
+        info "在本地环境中启动前端开发服务器..."
+        mkdir -p ../logs
+        # 使用环境变量启动
+        export REACT_APP_API_URL="$FRONTEND_API_URL"
+        nohup npm start > ../logs/frontend.log 2>&1 &
+        FRONTEND_PID=$!
+        
+        # 检查进程是否启动成功
+        sleep 5
         if ps -p $FRONTEND_PID > /dev/null; then
-            success "前端服务正在运行，PID: $FRONTEND_PID"
+            cd ..
+            echo $FRONTEND_PID > .frontend.pid
+            success "前端服务已启动，PID: $FRONTEND_PID，日志位于: logs/frontend.log"
+            success "前端使用API地址: $FRONTEND_API_URL"
+            return 0
         else
-            warning "前端服务未运行，PID文件可能过期，尝试启动..."
-            start_frontend
+            cd ..
+            error "前端服务启动失败，请查看日志: logs/frontend.log"
+            return 1
         fi
-    else
-        warning "未找到前端服务的PID文件，尝试启动..."
-        start_frontend
     fi
 }
 
-# 查看日志
-view_logs() {
-    LOG_TYPE=$1
+# 启动所有服务
+start_all_services() {
+    info "正在启动所有服务..."
     
-    case $LOG_TYPE in
-        api)
-            if [ -f logs/api.log ]; then
-                tail -f logs/api.log
-            else
-                error "API日志文件不存在"
-            fi
-            ;;
-        frontend)
-            if [ -f logs/frontend.log ]; then
-                tail -f logs/frontend.log
-            else
-                error "前端日志文件不存在"
-            fi
-            ;;
-        *)
-            error "未知的日志类型: $LOG_TYPE"
-            echo "可用的日志类型: api, frontend"
-            ;;
-    esac
-}
-
-# 显示帮助信息
-show_help() {
-    echo "使用方法: $0 [选项]"
-    echo
-    echo "选项:"
-    echo "  start       启动所有服务"
-    echo "  stop        停止所有服务"
-    echo "  restart     重启所有服务"
-    echo "  status      查看服务状态"
-    echo "  logs [type] 查看日志 (类型: api, frontend)"
-    echo "  help        显示此帮助信息"
-    echo
+    # 首先停止已运行的服务
+    stop_services
+    
+    # 启动MySQL服务
+    start_mysql
+    
+    # 检查并构建前端
+    check_and_build_frontend
+    
+    # 在Docker环境中前台启动后端API服务
+    if [ "$IS_DOCKER" = true ]; then
+        # 直接启动API服务（前台运行）
+        start_api
+    else
+        # 启动前端和后端服务（后台运行）
+        start_api
+        start_frontend
+        
+        # 显示服务访问地址
+        echo ""
+        echo "========================================"
+        success "所有服务已启动"
+        echo "后端API访问地址: http://localhost:5002/api"
+        echo "前端访问地址: http://localhost:3000"
+        echo "========================================"
+    fi
 }
 
 # 主函数
 main() {
-    # 检测是否在Docker容器中运行
-    detect_docker
+    echo "========================================"
+    echo "       音频处理应用启动脚本"
+    echo "========================================"
+    
+    # 解析命令行参数
+    parse_args "$@"
     
     # 检测操作系统
     detect_os
     
-    # 处理命令行参数
-    COMMAND=${1:-"start"}
+    # 配置Docker环境
+    setup_docker_env
     
-    case $COMMAND in
-        start)
-            echo "========================================"
-            echo "      启动音频处理应用"
-            echo "========================================"
-            echo
-            
-            # 自动关停已运行的服务
-            cleanup_before_start
-            
-            # 启动服务
-            start_mysql
-            start_api
-            start_frontend
-            
-            echo
-            echo "========================================"
-            success "所有服务已启动"
-            echo "后端API访问地址: http://localhost:5002/api"
-            echo "前端访问地址: http://localhost:3000"
-            echo "========================================"
-            ;;
-        stop)
-            echo "========================================"
-            echo "      停止音频处理应用"
-            echo "========================================"
-            echo
-            
-            # 停止服务
-            # stop_services
-            cleanup_before_start
-
-            # 询问是否停止MySQL
-            read -p "是否要停止MySQL服务？(y/n) " STOP_MYSQL
-            if [ "$STOP_MYSQL" == "y" ] || [ "$STOP_MYSQL" == "Y" ]; then
-                stop_services "stop_mysql"
-            fi
-            
-            echo
-            echo "========================================"
-            success "所有服务已停止"
-            echo "========================================"
-            ;;
-        restart)
-            echo "========================================"
-            echo "      重启音频处理应用"
-            echo "========================================"
-            echo
-            
-            # 停止然后启动服务
-            cleanup_before_start
-            sleep 2
-            start_mysql
-            start_api
-            start_frontend
-            
-            echo
-            echo "========================================"
-            success "所有服务已重启"
-            echo "后端API访问地址: http://localhost:5002/api"
-            echo "前端访问地址: http://localhost:3000"
-            echo "========================================"
-            ;;
-        status)
-            echo "========================================"
-            echo "      查看服务状态"
-            echo "========================================"
-            echo
-            
-            # 检查服务状态
-            check_services
-            
-            echo
-            echo "========================================"
-            ;;
-        logs)
-            LOG_TYPE=${2:-"api"}
-            view_logs $LOG_TYPE
-            ;;
-        help|*)
-            show_help
-            ;;
-    esac
+    # 设置数据库连接环境变量
+    setup_db_env
+    
+    # 激活Python虚拟环境
+    activate_venv
+    
+    # 配置Node.js环境
+    setup_nodejs_env
+    
+    # 检查目录
+    check_directories
+    
+    # 启动所有服务
+    start_all_services
 }
 
-# 执行主函数
+# 执行主函数，传递命令行参数
 main "$@"
