@@ -2,9 +2,11 @@ import os
 import tempfile
 import logging
 import threading
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import List, Callable, Dict, Any, Optional, Union
+import shutil
 
 from .audio_utils import AudioUtils
 from ..temp import TempFileManager
@@ -15,6 +17,25 @@ try:
     PYAV_AVAILABLE = True
 except ImportError:
     PYAV_AVAILABLE = False
+
+# 添加一个全局锁用于控制FFmpeg并发实例数量
+FFMPEG_SEMAPHORE = threading.Semaphore(4)  # 最多同时运行4个FFmpeg进程
+
+# 检查ffmpeg是否可用
+def is_ffmpeg_available():
+    """检查系统是否安装了ffmpeg"""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"], 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            timeout=2
+        )
+        return result.returncode == 0
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return False
+
+FFMPEG_AVAILABLE = is_ffmpeg_available()
 
 @dataclass
 class SegmentOptions:
@@ -77,12 +98,15 @@ class SplitOptions:
 class AudioSplitter:
     """音频分割器类"""
     
-    def __init__(self, max_workers=None):
+    def __init__(self, max_workers=None, ffmpeg_threads=2, max_ffmpeg_processes=4, dynamic_resource_mgmt=True):
         """
         初始化音频分割器
         
         Args:
             max_workers: 最大并行工作线程数（默认为CPU核心数-1，最小为2）
+            ffmpeg_threads: 单个FFmpeg进程使用的线程数（低值如2-3能够提升并发性能）
+            max_ffmpeg_processes: 允许同时运行的最大FFmpeg进程数
+            dynamic_resource_mgmt: 是否启用动态资源管理（根据系统负载调整并发度）
         """
         self.logger = logging.getLogger(__name__)
         
@@ -90,11 +114,76 @@ class AudioSplitter:
         if max_workers is None:
             import os
             cpu_count = os.cpu_count() or 4  # 如果获取失败，默认为4
-            self.max_workers = max(2, cpu_count - 1)  # 至少为2
+            self.max_workers = max(2, min(8, cpu_count - 1))  # 至少为2，最多为8，避免资源耗尽
         else:
-            self.max_workers = max(2, max_workers)  # 确保至少为2
+            self.max_workers = max(2, min(8, max_workers))  # 确保至少为2，最多为8
+        
+        # 设置FFmpeg相关参数
+        self.ffmpeg_threads = max(1, min(4, ffmpeg_threads))  # 限制范围1-4
+        self.max_ffmpeg_processes = max(2, min(8, max_ffmpeg_processes))  # 范围2-8
+        
+        # 创建FFmpeg信号量，用于控制并发FFmpeg进程数
+        global FFMPEG_SEMAPHORE
+        FFMPEG_SEMAPHORE = threading.Semaphore(self.max_ffmpeg_processes)
+        
+        # 动态资源管理
+        self.dynamic_resource_mgmt = dynamic_resource_mgmt
+        
+        # 跟踪正在运行的FFmpeg进程
+        self._active_processes = []
+        self._process_lock = threading.Lock()  # 用于保护进程列表
+        
+        # 内存告警阈值，一旦超过将减少并发度
+        self.memory_warning_threshold = 75  # 百分比
+        self.memory_critical_threshold = 90  # 百分比
+        
+        # 初始化方法可用性
+        self._ffmpeg_available = FFMPEG_AVAILABLE
+        self._pyav_available = PYAV_AVAILABLE
+        
+        self.logger.info(f"初始化音频分割器: 最大线程数={self.max_workers}, "
+                         f"FFmpeg可用={self._ffmpeg_available}, FFmpeg线程={self.ffmpeg_threads}, "
+                         f"最大FFmpeg进程数={self.max_ffmpeg_processes}, "
+                         f"动态资源管理={self.dynamic_resource_mgmt}")
+        
+        # 验证FFmpeg可用性
+        if not self._ffmpeg_available:
+            self.logger.warning("FFmpeg不可用，将使用效率较低的备选方法")
+    
+    def _terminate_active_processes(self):
+        """终止所有活动的FFmpeg进程"""
+        if not hasattr(self, '_active_processes'):
+            return
             
-        self.logger.info(f"初始化音频分割器: 最大线程数={self.max_workers}, PyAV可用={PYAV_AVAILABLE}")
+        for process in list(self._active_processes):
+            try:
+                if process.poll() is None:  # 进程仍在运行
+                    process.terminate()  # 尝试优雅终止
+                    self.logger.info(f"终止FFmpeg进程: PID={process.pid}")
+                    
+                    # 给进程一点时间自行结束
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # 2秒后仍未结束，强制杀死
+                        process.kill()
+                        self.logger.warning(f"强制杀死FFmpeg进程: PID={process.pid}")
+                    
+                # 从列表中移除
+                if process in self._active_processes:
+                    self._active_processes.remove(process)
+            except Exception as e:
+                self.logger.error(f"终止进程时出错: {str(e)}")
+        
+        # 清空列表
+        self._active_processes = []
+    
+    def __del__(self):
+        """析构函数，确保终止所有进程"""
+        try:
+            self._terminate_active_processes()
+        except:
+            pass
     
     def prepare_segments(self, segments: List[Dict[str, Any]], min_length: float = 3.0, 
                         max_length: float = 60.0, preserve_sentences: bool = True) -> List[Dict[str, Any]]:
@@ -181,7 +270,7 @@ class AudioSplitter:
     def _split_segment(self, audio_file: str, segment_options: SegmentOptions, 
                       output_file: str, split_options: SplitOptions) -> bool:
         """
-        分割单个音频片段
+        分割单个音频片段 - 优先使用FFmpeg
         
         Args:
             audio_file: 音频文件路径
@@ -206,24 +295,143 @@ class AudioSplitter:
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir, exist_ok=True)
             
-            # 如果PyAV可用，使用PyAV切割
-            if PYAV_AVAILABLE and ext.lower() in ['.mp3', '.wav', '.ogg', '.m4a', '.flac']:
+            # 优先使用FFmpeg（性能最佳）
+            if self._ffmpeg_available:
+                success = self._split_with_ffmpeg(
+                    audio_file, start_time, end_time, output_file, split_options
+                )
+                if success:
+                    return True
+                self.logger.warning(f"FFmpeg分割失败，尝试备用方法")
+            
+            # 如果FFmpeg失败，尝试其他方法
+            # 尝试传统方法(pydub)
+            success = self._split_with_pydub(
+                audio_file, start_time, end_time, output_file, split_options
+            )
+            
+            if success:
+                return True
+                
+            # 次优先使用PyAV切割（仅在前两种方法失败后）
+            if self._pyav_available and ext.lower() in ['.mp3', '.wav', '.ogg', '.m4a', '.flac']:
                 success = self._split_with_pyav(
                     audio_file, start_time, end_time, output_file, split_options
                 )
                 if success:
                     return True
-                self.logger.warning(f"PyAV分割失败，回退到传统方法")
             
-            # 回退到传统方法(pydub)
-            return self._split_with_pydub(
-                audio_file, start_time, end_time, output_file, split_options
-            )
+            return False
             
         except Exception as e:
             self.logger.exception(f"分割音频片段失败: {str(e)}")
-            import traceback
-            self.logger.error(f"详细错误: {traceback.format_exc()}")
+            return False
+    
+    def _split_with_ffmpeg(self, audio_file: str, start_time: float, end_time: float, 
+                          output_file: str, split_options: SplitOptions) -> bool:
+        """使用FFmpeg分割音频（性能最佳）"""
+        try:
+            format_options = split_options.get_format_options()
+            output_format = split_options.output_format.lower()
+            
+            # 计算片段时长
+            duration = end_time - start_time
+            
+            # 构建FFmpeg命令
+            cmd = ["ffmpeg", "-y", "-nostdin"]  # 覆盖输出文件，不使用标准输入
+            
+            # 设置处理日志级别，避免过多输出
+            cmd.extend(["-loglevel", "error"])
+            
+            # 优化输入参数：先seek再解码，提高性能
+            cmd.extend(["-ss", f"{start_time:.3f}"])
+            cmd.extend(["-i", audio_file])
+            cmd.extend(["-t", f"{duration:.3f}"])
+            
+            # 添加高性能处理参数
+            cmd.extend(["-threads", str(self.ffmpeg_threads)])  # 控制单个ffmpeg实例的线程数
+            cmd.extend(["-avoid_negative_ts", "1"])
+            
+            # 关闭复杂的音频处理，加快处理速度
+            cmd.extend(["-af", "aresample=async=1:first_pts=0"])
+            
+            # 根据输出格式添加特定的参数
+            if output_format == "mp3":
+                bitrate = format_options.get("bitrate", "128k")
+                # 使用libmp3lame编码器并设置高性能模式（-compression_level 0）
+                cmd.extend(["-c:a", "libmp3lame", "-compression_level", "2", "-b:a", bitrate])
+            elif output_format == "wav":
+                sample_rate = format_options.get("sample_rate", 44100)
+                cmd.extend(["-c:a", "pcm_s16le", "-ar", str(sample_rate)])
+            elif output_format == "ogg":
+                quality = format_options.get("quality", 5)
+                # 使用高速压缩模式
+                cmd.extend(["-c:a", "libvorbis", "-q:a", str(quality)])
+            else:
+                # 使用默认编码，但优化速度
+                cmd.extend(["-c:a", "copy"])
+            
+            # 添加其他通用参数
+            cmd.extend(["-vn"])  # 不包含视频
+            cmd.extend(["-map_metadata", "-1"])  # 不复制元数据
+            
+            # 添加输出文件
+            cmd.append(output_file)
+            
+            # 使用线程信号量控制并发FFmpeg进程数量
+            with FFMPEG_SEMAPHORE:
+                # 执行FFmpeg命令
+                self.logger.debug(f"执行FFmpeg命令: {' '.join(map(str, cmd))}")
+                
+                # 启动进程
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace'
+                )
+                
+                # 将进程添加到跟踪列表
+                with self._process_lock:
+                    self._active_processes.append(process)
+                
+                # 设置超时时间（秒），更智能地根据音频时长调整
+                timeout_seconds = max(10, min(120, int(duration * 5)))  # 至少10秒，最多2分钟
+                
+                try:
+                    # 等待进程完成，带超时
+                    stdout, stderr = process.communicate(timeout=timeout_seconds)
+                    
+                    # 检查命令是否成功
+                    if process.returncode != 0:
+                        self.logger.error(f"FFmpeg命令执行失败，返回码: {process.returncode}")
+                        self.logger.error(f"错误输出: {stderr[:300]}...")
+                        return False
+                    
+                except subprocess.TimeoutExpired:
+                    # 超时，终止进程
+                    self.logger.error(f"FFmpeg进程超时 (>{timeout_seconds}秒)，强制终止")
+                    process.kill()
+                    return False
+                finally:
+                    # 确保从活动进程列表中移除
+                    with self._process_lock:
+                        if process in self._active_processes:
+                            self._active_processes.remove(process)
+            
+            # 简化的输出文件验证
+            if not os.path.exists(output_file) or os.path.getsize(output_file) < 100:  # 文件至少应该有100字节
+                self.logger.error(f"FFmpeg分割失败: 输出文件{output_file}不存在或过小")
+                return False
+            
+            file_size = os.path.getsize(output_file) / 1024  # KB
+            self.logger.info(f"FFmpeg成功分割音频: {output_file} ({file_size:.2f} KB)")
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"使用FFmpeg分割音频失败: {str(e)}")
             return False
     
     def _split_with_pyav(self, audio_file: str, start_time: float, end_time: float, 
@@ -349,16 +557,16 @@ class AudioSplitter:
     
     def split(self, audio_file: str, segment_options_list: List[SegmentOptions], 
              output_dir: str, options: Optional[SplitOptions] = None, 
-             on_progress: Optional[Callable[[int, int], None]] = None) -> List[str]:
+             on_progress: Optional[Callable[[str, int], None]] = None) -> List[str]:
         """
-        按照给定的时间段列表分割音频文件
+        按照给定的时间段列表分割音频文件 - 高性能版本
         
         Args:
             audio_file: 要分割的音频文件路径
             segment_options_list: 分段选项列表
             output_dir: 输出目录
             options: 分割选项
-            on_progress: 进度回调函数 (current, total) -> None
+            on_progress: 进度回调函数 (message, percent) -> None
             
         Returns:
             生成的分段文件路径列表
@@ -372,13 +580,53 @@ class AudioSplitter:
             self.logger.error(f"音频文件不存在: {audio_file}")
             return []
         
+        # 检查分段是否为空
+        if not segment_options_list:
+            self.logger.error("没有提供分段信息")
+            return []
+        
+        # 创建分割任务专用临时文件管理器
+        temp_manager = TempFileManager(prefix="audio_split_")
+        
+        # 线程安全计数器和监视器
+        progress_monitor = {
+            "total": len(segment_options_list),
+            "current": 0,
+            "success": 0,
+            "failed": 0,
+            "lock": threading.Lock()
+        }
+        
         try:
             # 获取音频信息
             audio_info = AudioUtils.get_audio_info(audio_file)
-            self.logger.info(f"音频信息: 时长={audio_info.get('duration', 'unknown')}秒, "
-                            f"格式={audio_info.get('format', 'unknown')}, "
-                            f"比特率={audio_info.get('bit_rate', 'unknown')}")
             audio_duration = float(audio_info.get('duration', 0))
+            
+            # 验证分段的合法性
+            valid_segments = []
+            for idx, segment in enumerate(segment_options_list):
+                if segment.end <= segment.start:
+                    self.logger.warning(f"跳过无效分段 #{idx}: 结束时间 {segment.end} <= 开始时间 {segment.start}")
+                    continue
+                
+                # 修正超出音频时长的分段
+                if audio_duration > 0:
+                    if segment.start >= audio_duration:
+                        self.logger.warning(f"跳过无效分段 #{idx}: 开始时间 {segment.start} >= 音频时长 {audio_duration}")
+                        continue
+                    
+                    if segment.end > audio_duration:
+                        self.logger.warning(f"修正分段 #{idx}: 结束时间 {segment.end} > 音频时长 {audio_duration}")
+                        segment.end = audio_duration
+                
+                valid_segments.append(segment)
+            
+            # 更新总计数
+            progress_monitor["total"] = len(valid_segments)
+            
+            if not valid_segments:
+                self.logger.error("所有分段都无效")
+                return []
             
             # 验证输出目录
             if not os.path.exists(output_dir):
@@ -389,51 +637,68 @@ class AudioSplitter:
             if options is None:
                 options = SplitOptions()
             
-            # 格式化文件名（使用序号）
+            # 输出文件列表
             output_files = []
             
-            # 创建一个线程安全的计数器
-            progress_counter = {"current": 0, "total": len(segment_options_list), "lock": threading.Lock()}
-            
-            # 定义分割任务
+            # 定义更智能的分割任务
             def split_task(idx, segment_opt):
                 try:
-                    # 创建输出文件名
-                    segment_text = segment_opt.text.strip()[:30]
+                    # 创建输出文件名，使用序号和文本
+                    segment_text = segment_opt.text.strip()[:30] if segment_opt.text else f"segment_{idx+1}"
                     safe_filename = AudioUtils.make_safe_filename(segment_text)
                     output_filename = f"{idx+1:03d}_{safe_filename}.{options.output_format}"
                     output_path = os.path.join(output_dir, output_filename)
                     
-                    # 分割片段
+                    # 分割片段 - 优先使用FFmpeg
                     success = self._split_segment(audio_file, segment_opt, output_path, options)
                     
                     # 更新进度
-                    with progress_counter["lock"]:
-                        progress_counter["current"] += 1
-                        current = progress_counter["current"]
-                        total = progress_counter["total"]
+                    with progress_monitor["lock"]:
+                        progress_monitor["current"] += 1
+                        if success:
+                            progress_monitor["success"] += 1
+                        else:
+                            progress_monitor["failed"] += 1
+                        
+                        current = progress_monitor["current"]
+                        total = progress_monitor["total"]
+                        success_count = progress_monitor["success"]
+                        failed_count = progress_monitor["failed"]
                     
+                    # 生成进度信息
+                    progress_message = f"进度 {current}/{total} (成功: {success_count}, 失败: {failed_count})"
+                    progress_percent = int((current / total) * 100) if total > 0 else 0
+                    
+                    # 调用进度回调
                     if on_progress:
-                        on_progress(current, total)
+                        try:
+                            on_progress(progress_message, progress_percent)
+                        except Exception as callback_error:
+                            self.logger.error(f"进度回调出错: {str(callback_error)}")
                     
-                    self.logger.info(f"处理进度: {current}/{total} - 完成度: {current/total*100:.1f}%")
+                    # 定期记录进度
+                    if current % 5 == 0 or current == total:
+                        self.logger.info(f"处理进度: {progress_message} - {progress_percent}%")
                     
+                    # 返回结果
                     if success:
                         return output_path
                     return None
                     
                 except Exception as e:
                     self.logger.exception(f"处理分段 {idx} 时出错: {str(e)}")
+                    with progress_monitor["lock"]:
+                        progress_monitor["failed"] += 1
                     return None
             
-            # 使用线程池并行处理
-            self.logger.info(f"使用 {self.max_workers} 个线程并行处理 {len(segment_options_list)} 个片段")
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # 创建分割任务
-                futures = {
-                    executor.submit(split_task, idx, segment_opt): idx 
-                    for idx, segment_opt in enumerate(segment_options_list)
-                }
+            # 根据分段数量和资源情况优化并发度
+            actual_workers = min(self.max_workers, len(valid_segments), self.max_ffmpeg_processes * 2)
+            self.logger.info(f"使用 {actual_workers} 个线程处理 {len(valid_segments)} 个片段")
+            
+            # 使用具有更好资源管理的线程池
+            with ThreadPoolExecutor(max_workers=actual_workers) as executor:
+                # 提交所有任务
+                futures = {executor.submit(split_task, idx, segment): idx for idx, segment in enumerate(valid_segments)}
                 
                 # 收集结果
                 for future in as_completed(futures):
@@ -447,7 +712,7 @@ class AudioSplitter:
             
             # 输出处理总结
             success_count = len(output_files)
-            total_count = len(segment_options_list)
+            total_count = len(valid_segments)
             success_rate = success_count / total_count * 100 if total_count > 0 else 0
             
             self.logger.info(f"音频分割完成: 成功 {success_count}/{total_count} ({success_rate:.1f}%)")
@@ -458,3 +723,12 @@ class AudioSplitter:
         except Exception as e:
             self.logger.exception(f"分割音频文件失败: {str(e)}")
             return []
+        finally:
+            # 终止所有活动的进程
+            self._terminate_active_processes()
+            
+            # 清理临时文件
+            try:
+                temp_manager.cleanup()
+            except Exception as cleanup_error:
+                self.logger.error(f"清理临时资源失败: {str(cleanup_error)}")
